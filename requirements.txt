@@ -9,3 +9,5 @@ gTTS>=2.4.0
 pydub==0.25.1 
 audioop-lts>=0.0.4
 ffmpeg-python>=0.2.0 
+ffmpeg
+fonts-wqy-microhei
