@@ -11,7 +11,8 @@ from pydub import AudioSegment
 import subprocess
 import traceback
 import gc
-import ffmpeg  # 新增：使用ffmpeg-python库
+import ffmpeg
+import sys
 
 # 页面配置
 st.set_page_config(
@@ -64,14 +65,23 @@ def wrap_text(text, max_chars):
     return lines
 
 def get_font(size):
-    """获取字体（兼容不同环境）"""
+    """获取支持中文的字体（兼容不同环境）"""
     try:
-        # 尝试加载系统中文字体（多平台兼容）
-        for font_name in ["SimHei", "WenQuanYi Micro Hei", "Heiti TC", "Arial Unicode MS"]:
-            return ImageFont.truetype(font_name, size)
-        # 加载失败时返回默认字体
+        # 优先尝试加载系统中文字体（多平台兼容）
+        font_candidates = [
+            "SimHei", "WenQuanYi Micro Hei", "Heiti TC", 
+            "Arial Unicode MS", "Microsoft YaHei"
+        ]
+        for font_name in font_candidates:
+            try:
+                return ImageFont.truetype(font_name, size)  # 明确传递字号参数
+            except:
+                continue
+        # 加载失败时返回默认字体并提示
+        st.warning("未找到合适的中文字体，可能导致中文显示异常")
         return ImageFont.load_default()
-    except:
+    except Exception as e:
+        st.warning(f"字体加载错误: {str(e)}")
         return ImageFont.load_default()
 
 def create_frame(english, chinese, phonetic, width=1280, height=720, 
@@ -89,7 +99,7 @@ def create_frame(english, chinese, phonetic, width=1280, height=720,
         img = Image.new('RGB', (width, height), bg_color)
     
     draw = ImageDraw.Draw(img)
-    # 获取字体
+    # 获取字体（明确传递字号）
     eng_font = get_font(eng_size)
     chn_font = get_font(chn_size)
     pho_font = get_font(pho_size)
