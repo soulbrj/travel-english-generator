@@ -18,17 +18,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# 初始化会话状态
-if 'bg_image' not in st.session_state:
-    st.session_state.bg_image = None
-if 'audio_available' not in st.session_state:
-    st.session_state.audio_available = True  # 标记音频功能是否可用
-if 'ffmpeg_available' not in st.session_state:
-    st.session_state.ffmpeg_available = check_ffmpeg()  # 启动时检查ffmpeg
-
-
 # --------------------------
-# 核心功能函数
+# 核心功能函数（优先定义依赖函数）
 # --------------------------
 def check_ffmpeg():
     """检查ffmpeg是否可用"""
@@ -200,7 +191,7 @@ def merge_audio_files(audio_paths, target_duration):
 def merge_video_audio(video_path, audio_path, output_path):
     """用ffmpeg合并音视频"""
     if not st.session_state.ffmpeg_available:
-        st.error("未找到ffmpeg，请安装后重试（https://ffmpeg.org/）")
+        st.error("未找到ffmpeg，音频功能无法使用（需安装ffmpeg支持）")
         return None
     
     cmd = [
@@ -227,6 +218,17 @@ def merge_video_audio(video_path, audio_path, output_path):
     except Exception as e:
         st.error(f"音视频合并失败: {str(e)}")
         return None
+
+
+# --------------------------
+# 初始化会话状态（在依赖函数定义之后）
+# --------------------------
+if 'bg_image' not in st.session_state:
+    st.session_state.bg_image = None
+if 'audio_available' not in st.session_state:
+    st.session_state.audio_available = True  # 标记音频功能是否可用
+if 'ffmpeg_available' not in st.session_state:
+    st.session_state.ffmpeg_available = check_ffmpeg()  # 现在可以安全调用
 
 
 # --------------------------
