@@ -308,8 +308,9 @@ if uploaded_file:
             with col4:
                 duration = st.slider("每句显示时间(秒)", 2, 10, 5)
                 fps = st.slider("帧率", 10, 30, 24)
-                resolution = st.selectbox("视频分辨率", ["1280x720 (HD)", "1920x1080 (FHD)"])
-                width, height = map(int, resolution.split('x'))
+                  resolution = st.selectbox("视频分辨率", ["1280x720 (HD)", "1920x1080 (FHD)"])
+                # 只提取数字部分进行转换
+                width, height = map(int, resolution.split('x')[0].split(' ')[0].split('x'))
             with col5:
                 tts_lang = st.selectbox("语音语言", ["英语", "中文"])
                 tts_speed = st.slider("语音速度", 0.5, 2.0, 1.0)
@@ -431,3 +432,4 @@ if uploaded_file:
         st.error(f"文件处理错误: {str(e)}")
 else:
     st.info("请先上传包含'英语'、'中文'、'音标'三列的Excel文件")
+
