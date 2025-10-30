@@ -1,7 +1,3 @@
 ffmpeg
-libsm6
-libxext6
-fontconfig
-fonts-dejavu
-fonts-liberation
-fonts-noto-cjk
+espeak
+espeak-data
