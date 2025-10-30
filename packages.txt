@@ -1,2 +1,7 @@
 ffmpeg
-fonts-wqy-microhei  # 文泉驿微米黑，补充系统字体
+libsm6
+libxext6
+fontconfig
+fonts-dejavu
+fonts-liberation
+fonts-noto-cjk
