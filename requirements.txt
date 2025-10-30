@@ -8,5 +8,4 @@ numpy>=1.26.0
 gTTS>=2.4.0
 pydub==0.25.1 
 audioop-lts>=0.0.4
-ffmpeg-python>=0.2.0 
-
+ffmpeg-python==0.1.17  # 降级到兼容版本
