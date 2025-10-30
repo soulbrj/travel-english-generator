@@ -7,4 +7,4 @@ imageio-ffmpeg>=0.4.9
 numpy>=1.26.0
 gTTS>=2.4.0
 pydub>=0.25.1
-pyaudio>=0.2.13
+
