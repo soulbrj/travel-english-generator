@@ -23,6 +23,8 @@ st.markdown("### 🌐 高级自定义视频生成 - 修复版")
 # 初始化session state
 if 'background_image' not in st.session_state:
     st.session_state.background_image = None
+if 'background_image_pil' not in st.session_state:
+    st.session_state.background_image_pil = None
 
 # 特性介绍
 col1, col2, col3 = st.columns(3)
@@ -42,7 +44,6 @@ uploaded_file = st.file_uploader("选择Excel文件", type=['xlsx', 'xls'],
 
 def create_custom_font(size):
     """创建自定义字体对象来模拟字号效果"""
-    # 创建一个虚拟的字体对象来维护字号信息
     class CustomFont:
         def __init__(self, size):
             self.size = size
@@ -93,132 +94,143 @@ def create_video_frame(text_english, text_chinese, text_phonetic, width=1280, he
                       text_bg_color=(0, 0, 0, 180), text_bg_radius=20):
     """创建单个视频帧"""
     
-    # 创建图像
-    if bg_image:
-        img = bg_image.resize((width, height)).convert('RGB')
-    else:
-        img = Image.new('RGB', (width, height), color=bg_color)
-    
-    draw = ImageDraw.Draw(img)
-    
-    # 创建字体对象（模拟字号效果）
-    english_font = create_custom_font(english_size)
-    chinese_font = create_custom_font(chinese_size)
-    phonetic_font = create_custom_font(phonetic_size)
-    
-    # 计算文本区域总高度
-    english_lines = wrap_text(text_english, 35)
-    chinese_lines = wrap_text(text_chinese, 15)  # 中文每行较少字符
-    phonetic_lines = wrap_text(text_phonetic, 40) if text_phonetic and str(text_phonetic).strip() and str(text_phonetic) != 'nan' else []
-    
-    total_text_height = (len(english_lines) * english_font.char_height + 
-                        len(chinese_lines) * chinese_font.char_height + 
-                        len(phonetic_lines) * phonetic_font.char_height + 80)
-    
-    # 创建文本背景区域
-    text_bg_width = width - 100
-    text_bg_height = total_text_height + 40
-    text_bg_x = 50
-    text_bg_y = (height - text_bg_height) // 2
-    
-    # 绘制圆角矩形背景
-    for i in range(text_bg_radius):
-        radius = text_bg_radius - i
-        alpha = int(text_bg_color[3] * (1 - i/text_bg_radius))
-        bg_color_with_alpha = text_bg_color[:3] + (alpha,)
+    try:
+        # 创建图像
+        if bg_image and isinstance(bg_image, Image.Image):
+            try:
+                img = bg_image.resize((width, height)).convert('RGB')
+            except Exception as e:
+                img = Image.new('RGB', (width, height), color=bg_color)
+        else:
+            img = Image.new('RGB', (width, height), color=bg_color)
         
-        # 绘制四个角的圆弧
-        for corner_x, corner_y in [(text_bg_x, text_bg_y), 
-                                  (text_bg_x + text_bg_width - 2*radius, text_bg_y),
-                                  (text_bg_x, text_bg_y + text_bg_height - 2*radius),
-                                  (text_bg_x + text_bg_width - 2*radius, text_bg_y + text_bg_height - 2*radius)]:
-            for x in range(radius):
-                for y in range(radius):
-                    if (x - radius)**2 + (y - radius)**2 <= radius**2:
-                        img.putpixel((corner_x + x, corner_y + y), text_bg_color[:3])
-                        img.putpixel((corner_x + text_bg_width - radius + x, corner_y + y), text_bg_color[:3])
-                        img.putpixel((corner_x + x, corner_y + text_bg_height - radius + y), text_bg_color[:3])
-                        img.putpixel((corner_x + text_bg_width - radius + x, corner_y + text_bg_height - radius + y), text_bg_color[:3])
-    
-    # 绘制矩形主体
-    for x in range(text_bg_width - 2*text_bg_radius):
-        for y in range(text_bg_height):
-            img.putpixel((text_bg_x + text_bg_radius + x, text_bg_y + y), text_bg_color[:3])
-    
-    for y in range(text_bg_height - 2*text_bg_radius):
-        for x in range(text_bg_width):
-            img.putpixel((text_bg_x + x, text_bg_y + text_bg_radius + y), text_bg_color[:3])
-    
-    # 绘制文本
-    y_position = text_bg_y + 30
-    
-    # 绘制英语句子
-    for i, line in enumerate(english_lines):
-        text_width = len(line) * english_font.char_width
-        x = text_bg_x + (text_bg_width - text_width) // 2
-        y = y_position + i * english_font.char_height
+        draw = ImageDraw.Draw(img)
         
-        # 绘制文本阴影（增强可读性）
-        shadow_color = (0, 0, 0)
+        # 创建字体对象（模拟字号效果）
+        english_font = create_custom_font(english_size)
+        chinese_font = create_custom_font(chinese_size)
+        phonetic_font = create_custom_font(phonetic_size)
+        
+        # 计算文本区域总高度
+        english_lines = wrap_text(text_english, 35)
+        chinese_lines = wrap_text(text_chinese, 15)  # 中文每行较少字符
+        phonetic_lines = wrap_text(text_phonetic, 40) if text_phonetic and str(text_phonetic).strip() and str(text_phonetic) != 'nan' else []
+        
+        total_text_height = (len(english_lines) * english_font.char_height + 
+                            len(chinese_lines) * chinese_font.char_height + 
+                            len(phonetic_lines) * phonetic_font.char_height + 80)
+        
+        # 创建文本背景区域
+        text_bg_width = width - 100
+        text_bg_height = total_text_height + 40
+        text_bg_x = 50
+        text_bg_y = (height - text_bg_height) // 2
+        
+        # 绘制圆角矩形背景
+        for i in range(text_bg_radius):
+            radius = text_bg_radius - i
+            alpha = int(text_bg_color[3] * (1 - i/text_bg_radius))
+            bg_color_with_alpha = text_bg_color[:3] + (alpha,)
+            
+            # 绘制四个角的圆弧
+            for corner_x, corner_y in [(text_bg_x, text_bg_y), 
+                                      (text_bg_x + text_bg_width - 2*radius, text_bg_y),
+                                      (text_bg_x, text_bg_y + text_bg_height - 2*radius),
+                                      (text_bg_x + text_bg_width - 2*radius, text_bg_y + text_bg_height - 2*radius)]:
+                for x in range(radius):
+                    for y in range(radius):
+                        if (x - radius)**2 + (y - radius)**2 <= radius**2:
+                            img.putpixel((corner_x + x, corner_y + y), text_bg_color[:3])
+                            img.putpixel((corner_x + text_bg_width - radius + x, corner_y + y), text_bg_color[:3])
+                            img.putpixel((corner_x + x, corner_y + text_bg_height - radius + y), text_bg_color[:3])
+                            img.putpixel((corner_x + text_bg_width - radius + x, corner_y + text_bg_height - radius + y), text_bg_color[:3])
+        
+        # 绘制矩形主体
+        for x in range(text_bg_width - 2*text_bg_radius):
+            for y in range(text_bg_height):
+                img.putpixel((text_bg_x + text_bg_radius + x, text_bg_y + y), text_bg_color[:3])
+        
+        for y in range(text_bg_height - 2*text_bg_radius):
+            for x in range(text_bg_width):
+                img.putpixel((text_bg_x + x, text_bg_y + text_bg_radius + y), text_bg_color[:3])
+        
+        # 绘制文本
+        y_position = text_bg_y + 30
+        
+        # 绘制英语句子
+        for i, line in enumerate(english_lines):
+            text_width = len(line) * english_font.char_width
+            x = text_bg_x + (text_bg_width - text_width) // 2
+            y = y_position + i * english_font.char_height
+            
+            # 绘制文本阴影（增强可读性）
+            shadow_color = (0, 0, 0)
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text((x + dx, y + dy), line, fill=shadow_color)
+            
+            # 绘制主文本
+            draw.text((x, y), line, fill=english_color)
+        
+        y_position += len(english_lines) * english_font.char_height + 20
+        
+        # 绘制中文翻译
+        for i, line in enumerate(chinese_lines):
+            text_width = len(line) * chinese_font.char_width
+            x = text_bg_x + (text_bg_width - text_width) // 2
+            y = y_position + i * chinese_font.char_height
+            
+            # 绘制文本阴影
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text((x + dx, y + dy), line, fill=shadow_color)
+            
+            draw.text((x, y), line, fill=chinese_color)
+        
+        y_position += len(chinese_lines) * chinese_font.char_height + 15
+        
+        # 绘制音标
+        for i, line in enumerate(phonetic_lines):
+            text_width = len(line) * phonetic_font.char_width
+            x = text_bg_x + (text_bg_width - text_width) // 2
+            y = y_position + i * phonetic_font.char_height
+            
+            # 绘制文本阴影
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text((x + dx, y + dy), line, fill=shadow_color)
+            
+            draw.text((x, y), line, fill=phonetic_color)
+        
+        # 添加底部信息
+        info_text = "旅游英语学习视频"
+        info_width = len(info_text) * 10
+        info_x = (width - info_width) // 2
+        info_y = height - 40
+        
+        # 信息文本阴影
         for dx in [-1, 0, 1]:
             for dy in [-1, 0, 1]:
                 if dx == 0 and dy == 0:
                     continue
-                draw.text((x + dx, y + dy), line, fill=shadow_color)
+                draw.text((info_x + dx, info_y + dy), info_text, fill=(0, 0, 0))
         
-        # 绘制主文本
-        draw.text((x, y), line, fill=english_color)
-    
-    y_position += len(english_lines) * english_font.char_height + 20
-    
-    # 绘制中文翻译
-    for i, line in enumerate(chinese_lines):
-        text_width = len(line) * chinese_font.char_width
-        x = text_bg_x + (text_bg_width - text_width) // 2
-        y = y_position + i * chinese_font.char_height
+        draw.text((info_x, info_y), info_text, fill=(150, 150, 150))
         
-        # 绘制文本阴影
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                draw.text((x + dx, y + dy), line, fill=shadow_color)
+        return img
         
-        draw.text((x, y), line, fill=chinese_color)
-    
-    y_position += len(chinese_lines) * chinese_font.char_height + 15
-    
-    # 绘制音标
-    for i, line in enumerate(phonetic_lines):
-        text_width = len(line) * phonetic_font.char_width
-        x = text_bg_x + (text_bg_width - text_width) // 2
-        y = y_position + i * phonetic_font.char_height
-        
-        # 绘制文本阴影
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                draw.text((x + dx, y + dy), line, fill=shadow_color)
-        
-        draw.text((x, y), line, fill=phonetic_color)
-    
-    # 添加底部信息
-    info_text = "旅游英语学习视频"
-    info_width = len(info_text) * 10
-    info_x = (width - info_width) // 2
-    info_y = height - 40
-    
-    # 信息文本阴影
-    for dx in [-1, 0, 1]:
-        for dy in [-1, 0, 1]:
-            if dx == 0 and dy == 0:
-                continue
-            draw.text((info_x + dx, info_y + dy), info_text, fill=(0, 0, 0))
-    
-    draw.text((info_x, info_y), info_text, fill=(150, 150, 150))
-    
-    return img
+    except Exception as e:
+        # 如果出现任何错误，返回一个简单的黑色图像
+        error_img = Image.new('RGB', (width, height), color=(0, 0, 0))
+        draw = ImageDraw.Draw(error_img)
+        draw.text((50, 50), f"Error: {str(e)}", fill=(255, 0, 0))
+        return error_img
 
 def generate_video_from_dataframe(df, video_title, settings):
     """从DataFrame生成视频"""
@@ -231,19 +243,16 @@ def generate_video_from_dataframe(df, video_title, settings):
         fps = settings['fps']
         duration_per_sentence = settings['duration_per_sentence']
         
-        # 准备背景图片
+        # 准备背景图片 - 使用预处理的PIL图像
         bg_image = None
-        if settings['background_type'] == 'image' and st.session_state.background_image:
-            try:
-                bg_image = Image.open(st.session_state.background_image).convert('RGB')
-            except:
-                bg_image = None
+        if settings['background_type'] == 'image' and st.session_state.background_image_pil:
+            bg_image = st.session_state.background_image_pil
         
-        # 创建视频写入器 - 直接写入文件
+        # 创建视频写入器
         with imageio.get_writer(temp_path, fps=fps, 
                               codec='libx264', 
                               quality=8,
-                              macro_block_size=1) as writer:  # 避免分辨率整除问题
+                              macro_block_size=1) as writer:
             
             total_frames = len(df) * duration_per_sentence * fps + 3 * fps
             current_frame = 0
@@ -290,7 +299,7 @@ def generate_video_from_dataframe(df, video_title, settings):
         with open(temp_path, 'rb') as f:
             video_buffer = BytesIO(f.read())
         
-        # 返回最终结果（进度1.0表示完成）
+        # 返回最终结果
         yield 1.0, video_buffer
         
     except Exception as e:
@@ -306,48 +315,52 @@ def generate_video_from_dataframe(df, video_title, settings):
 
 def create_end_frame(width, height, sentence_count, title, settings):
     """创建结束帧"""
-    if settings['background_type'] == 'image' and st.session_state.background_image:
-        try:
-            img = Image.open(st.session_state.background_image).convert('RGB')
-            img = img.resize((width, height))
-        except:
+    try:
+        if settings['background_type'] == 'image' and st.session_state.background_image_pil:
+            img = st.session_state.background_image_pil.resize((width, height)).convert('RGB')
+        else:
             img = Image.new('RGB', (width, height), color=settings['bg_color'])
-    else:
-        img = Image.new('RGB', (width, height), color=settings['bg_color'])
-    
-    draw = ImageDraw.Draw(img)
-    
-    # 结束文字
-    texts = [
-        ("视频结束", settings['chinese_color']),
-        (f"共学习 {sentence_count} 个句子", (200, 200, 200)),
-        ("谢谢观看", settings['phonetic_color']),
-        (title, settings['english_color'])
-    ]
-    
-    # 计算总高度
-    total_height = sum([60 if i == 3 else 40 for i in range(len(texts))]) + 20 * (len(texts) - 1)
-    y_start = (height - total_height) // 2
-    
-    for i, (text, color) in enumerate(texts):
-        font_size = 60 if i == 3 else 40  # 标题用大字号
-        font = create_custom_font(font_size)
-        text_width = len(text) * font.char_width
-        x = (width - text_width) // 2
-        y = y_start
         
-        # 文本阴影
-        shadow_color = (0, 0, 0)
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                draw.text((x + dx, y + dy), text, fill=shadow_color)
+        draw = ImageDraw.Draw(img)
         
-        draw.text((x, y), text, fill=color)
-        y_start += font_size + 20
-    
-    return img
+        # 结束文字
+        texts = [
+            ("视频结束", settings['chinese_color']),
+            (f"共学习 {sentence_count} 个句子", (200, 200, 200)),
+            ("谢谢观看", settings['phonetic_color']),
+            (title, settings['english_color'])
+        ]
+        
+        # 计算总高度
+        total_height = sum([60 if i == 3 else 40 for i in range(len(texts))]) + 20 * (len(texts) - 1)
+        y_start = (height - total_height) // 2
+        
+        for i, (text, color) in enumerate(texts):
+            font_size = 60 if i == 3 else 40  # 标题用大字号
+            font = create_custom_font(font_size)
+            text_width = len(text) * font.char_width
+            x = (width - text_width) // 2
+            y = y_start
+            
+            # 文本阴影
+            shadow_color = (0, 0, 0)
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text((x + dx, y + dy), text, fill=shadow_color)
+            
+            draw.text((x, y), text, fill=color)
+            y_start += font_size + 20
+        
+        return img
+        
+    except Exception as e:
+        # 如果出现错误，返回简单图像
+        error_img = Image.new('RGB', (width, height), color=(0, 0, 0))
+        draw = ImageDraw.Draw(error_img)
+        draw.text((50, 50), "结束帧生成错误", fill=(255, 0, 0))
+        return error_img
 
 def get_video_download_link(video_buffer, filename):
     """生成视频下载链接"""
@@ -368,6 +381,18 @@ def hex_to_rgba(hex_color, alpha=255):
     """将十六进制颜色转换为RGBA"""
     rgb = hex_to_rgb(hex_color)
     return rgb + (alpha,)
+
+def process_background_image(uploaded_file):
+    """预处理背景图片"""
+    try:
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file).convert('RGB')
+            st.session_state.background_image_pil = image
+            return image
+        return None
+    except Exception as e:
+        st.error(f"背景图片处理失败: {str(e)}")
+        return None
 
 if uploaded_file is not None:
     try:
@@ -397,8 +422,10 @@ if uploaded_file is not None:
                 if background_type == "图片背景":
                     bg_upload = st.file_uploader("上传背景图片", type=['jpg', 'jpeg', 'png'], key="bg_upload")
                     if bg_upload:
+                        processed_image = process_background_image(bg_upload)
+                        if processed_image:
+                            st.image(processed_image, caption="背景图片预览", width=300)
                         st.session_state.background_image = bg_upload
-                        st.image(bg_upload, caption="背景图片预览", width=300)
             
             # 背景颜色设置（纯色背景时显示）
             if background_type == "纯色背景":
@@ -448,11 +475,8 @@ if uploaded_file is not None:
                 with preview_col1:
                     # 创建预览帧
                     preview_bg_image = None
-                    if background_type == "图片背景" and st.session_state.background_image:
-                        try:
-                            preview_bg_image = Image.open(st.session_state.background_image).convert('RGB')
-                        except:
-                            preview_bg_image = None
+                    if background_type == "图片背景" and st.session_state.background_image_pil:
+                        preview_bg_image = st.session_state.background_image_pil
                     
                     preview_frame = create_video_frame(
                         str(df.iloc[0]['英语']), 
@@ -507,6 +531,10 @@ if uploaded_file is not None:
             st.header("🎬 第三步：生成MP4视频")
             
             if st.button("🚀 开始生成视频", type="primary", use_container_width=True):
+                if len(df) == 0:
+                    st.error("❌ 没有可用的句子数据")
+                    st.stop()
+                
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 time_estimate = st.empty()
@@ -548,7 +576,7 @@ if uploaded_file is not None:
                             status_text.text(f"生成进度: {progress*100:.1f}%")
                             time_estimate.text(f"预计剩余: {remaining:.0f}秒")
                     
-                    if video_buffer:
+                    if video_buffer and hasattr(video_buffer, 'getvalue') and len(video_buffer.getvalue()) > 0:
                         st.balloons()
                         st.success("🎉 MP4视频生成完成！")
                         
