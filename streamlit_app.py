@@ -10,6 +10,8 @@ from gtts import gTTS
 from pydub import AudioSegment
 import subprocess
 import traceback
+import gc
+import ffmpeg  # 新增：使用ffmpeg-python库
 
 # 页面配置
 st.set_page_config(
@@ -188,34 +190,14 @@ def merge_audio_files(audio_paths, target_duration):
     return combined
 
 def merge_video_audio(video_path, audio_path, output_path):
-    """用ffmpeg合并音视频"""
-    if not check_ffmpeg():
-        st.error("未找到ffmpeg，请安装后重试（https://ffmpeg.org/）")
-        return None
-    
-    cmd = [
-        'ffmpeg', '-y',  # 覆盖输出文件
-        '-i', video_path,
-        '-i', audio_path,
-        '-c:v', 'copy',  # 视频流直接复制
-        '-c:a', 'aac',   # 音频转码为AAC
-        '-strict', 'experimental',
-        output_path
-    ]
-    
+    """用ffmpeg合并音视频（使用ffmpeg-python库）"""
     try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        if result.returncode != 0:
-            st.error(f"ffmpeg错误: {result.stderr}")
-            return None
+        ffmpeg.input(video_path).input(audio_path).output(
+            output_path, vcodec='copy', acodec='aac', strict='experimental'
+        ).run(overwrite_output=True)
         return output_path
-    except Exception as e:
-        st.error(f"音视频合并失败: {str(e)}")
+    except ffmpeg.Error as e:
+        st.error(f"音视频合并失败: {e.stderr.decode()}")
         return None
 
 # --------------------------
@@ -280,18 +262,15 @@ if uploaded_file:
                 pho_color = tuple(int(pho_color[i:i+2], 16) for i in (1,3,5))
                 pho_size = st.slider("音标字号", 16, 80, 40)
             
-            # 视频与音频设置（核心修改部分）
+            # 视频与音频设置
             st.subheader("视频与音频")
             col4, col5 = st.columns(2)
             with col4:
                 duration = st.slider("每句显示时间(秒)", 2, 10, 5)
                 fps = st.slider("帧率", 10, 30, 24)
-                # 修复1：统一缩进（与duration、fps同级，4个空格）
-                # 修复2：正确解析分辨率（只提取数字部分）
                 resolution = st.selectbox("视频分辨率", ["1280x720 (HD)", "1920x1080 (FHD)"])
-                # 提取分辨率中的数字（如"1280x720 (HD)" → 取"1280x720"再拆分）
-                res_num = resolution.split(' ')[0]  # 得到"1280x720"或"1920x1080"
-                width, height = map(int, res_num.split('x'))  # 正确转整数
+                res_num = resolution.split(' ')[0]
+                width, height = map(int, res_num.split('x'))
             with col5:
                 tts_lang = st.selectbox("语音语言", ["英语", "中文"])
                 tts_speed = st.slider("语音速度", 0.5, 2.0, 1.0)
@@ -306,8 +285,8 @@ if uploaded_file:
                     english=str(row['英语']),
                     chinese=str(row['中文']),
                     phonetic=str(row['音标']) if pd.notna(row['音标']) else "",
-                    width=width,  # 使用选择的分辨率宽度
-                    height=height,  # 使用选择的分辨率高度
+                    width=width,
+                    height=height,
                     bg_color=bg_color,
                     bg_image=st.session_state.bg_image,
                     eng_color=eng_color,
@@ -325,50 +304,45 @@ if uploaded_file:
                 with st.spinner("正在生成视频..."):
                     try:
                         with tempfile.TemporaryDirectory() as temp_dir:
-                            # 生成视频帧
-                            frames = []
+                            # 生成视频帧（流式写入，避免内存溢出）
                             audio_paths = []
                             total_frames = len(df) * duration * fps
                             progress = st.progress(0)
                             current = 0
                             
-                            for idx, row in df.iterrows():
-                                # 生成单帧（使用选择的分辨率）
-                                frame = create_frame(
-                                    english=str(row['英语']),
-                                    chinese=str(row['中文']),
-                                    phonetic=str(row['音标']) if pd.notna(row['音标']) else "",
-                                    width=width,
-                                    height=height,
-                                    bg_color=bg_color,
-                                    bg_image=st.session_state.bg_image,
-                                    eng_color=eng_color,
-                                    chn_color=chn_color,
-                                    pho_color=pho_color,
-                                    eng_size=eng_size,
-                                    chn_size=chn_size,
-                                    pho_size=pho_size
-                                )
-                                # 重复帧以达到时长
-                                for _ in range(duration * fps):
-                                    frames.append(np.array(frame.convert('RGB')))
-                                
-                                # 生成对应音频
-                                if st.session_state.audio_available:
-                                    audio_path = generate_audio(
-                                        text=str(row['英语']),
-                                        lang=tts_lang_code,
-                                        speed=tts_speed
-                                    )
-                                    audio_paths.append(audio_path)
-                                
-                                # 更新进度
-                                current += duration * fps
-                                progress.progress(min(current / total_frames, 1.0))
-                            
-                            # 保存视频（无音频）
                             video_path = os.path.join(temp_dir, "video_no_audio.mp4")
-                            imageio.mimsave(video_path, frames, fps=fps)
+                            with imageio.get_writer(video_path, fps=fps) as writer:
+                                for idx, row in df.iterrows():
+                                    # 生成单帧
+                                    frame = create_frame(
+                                        english=str(row['英语']),
+                                        chinese=str(row['中文']),
+                                        phonetic=str(row['音标']) if pd.notna(row['音标']) else "",
+                                        width=width,
+                                        height=height,
+                                        bg_color=bg_color,
+                                        bg_image=st.session_state.bg_image,
+                                        eng_color=eng_color,
+                                        chn_color=chn_color,
+                                        pho_color=pho_color,
+                                        eng_size=eng_size,
+                                        chn_size=chn_size,
+                                        pho_size=pho_size
+                                    )
+                                    # 直接写入帧，不缓存到列表
+                                    writer.append_data(np.array(frame.convert('RGB')))
+                                    # 更新进度
+                                    current += 1
+                                    progress.progress(min(current / total_frames, 1.0))
+                                    
+                                    # 生成对应音频
+                                    if st.session_state.audio_available:
+                                        audio_path = generate_audio(
+                                            text=str(row['英语']),
+                                            lang=tts_lang_code,
+                                            speed=tts_speed
+                                        )
+                                        audio_paths.append(audio_path)
                             
                             # 处理音频
                             final_video_path = video_path  # 默认无音频
@@ -400,6 +374,11 @@ if uploaded_file:
                     except Exception as e:
                         st.error(f"生成失败: {str(e)}")
                         st.text(traceback.format_exc())  # 显示详细错误信息
+                    finally:
+                        gc.collect()  # 强制垃圾回收
+                        # 清理临时资源（防止内存泄漏）
+                        if 'temp_dir' in locals():
+                            shutil.rmtree(temp_dir, ignore_errors=True)
     
     except Exception as e:
         st.error(f"文件处理错误: {str(e)}")
