@@ -283,18 +283,24 @@ def generate_video_from_dataframe(df, video_title, settings):
             for i in range(end_frames):
                 end_array = np.array(end_img)
                 writer.append_data(end_array)
-                yield (total_frames - 3 * fps + i) / total_frames
+                current_frame += 1
+                yield current_frame / total_frames
         
         # 读取生成的文件到内存
         with open(temp_path, 'rb') as f:
             video_buffer = BytesIO(f.read())
         
-        return video_buffer
+        # 返回最终结果（进度1.0表示完成）
+        yield 1.0, video_buffer
         
+    except Exception as e:
+        st.error(f"视频生成过程中出错: {str(e)}")
+        yield 1.0, None
     finally:
         # 清理临时文件
         try:
-            os.unlink(temp_path)
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
         except:
             pass
 
@@ -345,6 +351,9 @@ def create_end_frame(width, height, sentence_count, title, settings):
 
 def get_video_download_link(video_buffer, filename):
     """生成视频下载链接"""
+    if video_buffer is None:
+        return ""
+    
     video_buffer.seek(0)
     b64 = base64.b64encode(video_buffer.read()).decode()
     href = f'<a href="data:video/mp4;base64,{b64}" download="{filename}" style="background-color: #4CAF50; color: white; padding: 14px 20px; text-align: center; text-decoration: none; display: inline-block; border-radius: 5px; font-size: 16px; margin: 10px;">📥 下载MP4视频文件</a>'
@@ -519,18 +528,25 @@ if uploaded_file is not None:
                     
                     start_time = time.time()
                     video_buffer = None
+                    progress = 0
                     
-                    for progress in progress_generator:
-                        progress_bar.progress(progress)
+                    # 遍历生成器获取进度和最终结果
+                    for progress_data in progress_generator:
+                        if isinstance(progress_data, tuple) and len(progress_data) == 2:
+                            # 这是最终结果
+                            progress, video_buffer = progress_data
+                            progress_bar.progress(progress)
+                        else:
+                            # 这是进度数据
+                            progress = progress_data
+                            progress_bar.progress(progress)
+                        
                         elapsed = time.time() - start_time
                         if progress > 0:
                             total_estimated = elapsed / progress
                             remaining = total_estimated - elapsed
                             status_text.text(f"生成进度: {progress*100:.1f}%")
                             time_estimate.text(f"预计剩余: {remaining:.0f}秒")
-                    
-                    # 获取最终的video_buffer
-                    video_buffer = list(progress_generator)[-1] if hasattr(progress_generator, '__next__') else None
                     
                     if video_buffer:
                         st.balloons()
