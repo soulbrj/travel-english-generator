@@ -41,11 +41,15 @@ def generate_audio_system(text, lang='en', output_file=None):
     try:
         if system == "Windows":
             # 使用Windows SAPI
-            import win32com.client
-            speaker = win32com.client.Dispatch("SAPI.SpVoice")
-            speaker.Speak(text)
-            # Windows SAPI不能直接保存文件，这里简化处理
-            return None
+            try:
+                import win32com.client
+                speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                speaker.Speak(text)
+                # Windows SAPI不能直接保存文件，这里简化处理
+                return None
+            except ImportError:
+                st.warning("Windows TTS不可用，需要安装pywin32")
+                return None
         elif system == "Darwin":  # macOS
             # 使用say命令
             cmd = ['say', '-v', 'Alex' if lang == 'en' else 'Ting-Ting', '-o', output_file, text]
@@ -73,8 +77,8 @@ def generate_audio_fallback(text, lang='en'):
             tts = gTTS(text=text, lang=lang)
             tts.save(f.name)
             return f.name
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"gTTS失败: {str(e)}")
     
     # 方案2: 创建静音音频（完全离线方案）
     try:
@@ -98,7 +102,8 @@ def generate_audio_fallback(text, lang='en'):
                 
                 wav_file.writeframes(frames)
             return f.name
-    except:
+    except Exception as e:
+        st.warning(f"静音音频生成失败: {str(e)}")
         return None
 
 def wrap_text(text, max_chars):
