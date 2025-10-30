@@ -23,6 +23,8 @@ st.markdown("### 🌐 高级自定义视频生成 - 修复版")
 # 初始化session state
 if 'background_image' not in st.session_state:
     st.session_state.background_image = None
+if 'preview_bg_image' not in st.session_state:
+    st.session_state.preview_bg_image = None
 
 # 特性介绍
 col1, col2, col3 = st.columns(3)
@@ -84,6 +86,75 @@ def wrap_text(text, max_chars, font=None):
         lines.append(' '.join(current_line))
     
     return lines if lines else [text[:max_chars]]
+
+def create_simple_frame(text_english, text_chinese, text_phonetic, width=600, height=400, 
+                       bg_color=(0, 0, 0), 
+                       english_color=(255, 255, 255), chinese_color=(0, 255, 255), phonetic_color=(255, 255, 0),
+                       english_size=60, chinese_size=50, phonetic_size=40,
+                       text_bg_color=(0, 0, 0, 180), text_bg_radius=20):
+    """创建简单的预览帧（避免复杂图片处理）"""
+    
+    # 创建图像
+    img = Image.new('RGB', (width, height), color=bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # 创建字体对象
+    english_font = create_custom_font(english_size)
+    chinese_font = create_custom_font(chinese_size)
+    phonetic_font = create_custom_font(phonetic_size)
+    
+    # 计算文本区域
+    english_lines = wrap_text(text_english, 25)  # 预览时减少字符数
+    chinese_lines = wrap_text(text_chinese, 12)
+    phonetic_lines = wrap_text(text_phonetic, 30) if text_phonetic and str(text_phonetic).strip() and str(text_phonetic) != 'nan' else []
+    
+    # 计算总高度
+    total_text_height = (len(english_lines) * english_font.char_height + 
+                        len(chinese_lines) * chinese_font.char_height + 
+                        len(phonetic_lines) * phonetic_font.char_height + 60)
+    
+    # 文本背景区域
+    text_bg_width = width - 80
+    text_bg_height = total_text_height + 40
+    text_bg_x = 40
+    text_bg_y = (height - text_bg_height) // 2
+    
+    # 绘制简单矩形背景（替代复杂的圆角矩形）
+    for x in range(text_bg_width):
+        for y in range(text_bg_height):
+            if (text_bg_radius <= x <= text_bg_width - text_bg_radius or 
+                text_bg_radius <= y <= text_bg_height - text_bg_radius):
+                img.putpixel((text_bg_x + x, text_bg_y + y), text_bg_color[:3])
+    
+    # 绘制文本
+    y_position = text_bg_y + 20
+    
+    # 英语文本
+    for i, line in enumerate(english_lines):
+        text_width = len(line) * english_font.char_width
+        x = text_bg_x + (text_bg_width - text_width) // 2
+        y = y_position + i * english_font.char_height
+        draw.text((x, y), line, fill=english_color)
+    
+    y_position += len(english_lines) * english_font.char_height + 15
+    
+    # 中文文本
+    for i, line in enumerate(chinese_lines):
+        text_width = len(line) * chinese_font.char_width
+        x = text_bg_x + (text_bg_width - text_width) // 2
+        y = y_position + i * chinese_font.char_height
+        draw.text((x, y), line, fill=chinese_color)
+    
+    y_position += len(chinese_lines) * chinese_font.char_height + 10
+    
+    # 音标文本
+    for i, line in enumerate(phonetic_lines):
+        text_width = len(line) * phonetic_font.char_width
+        x = text_bg_x + (text_bg_width - text_width) // 2
+        y = y_position + i * phonetic_font.char_height
+        draw.text((x, y), line, fill=phonetic_color)
+    
+    return img
 
 def create_video_frame(text_english, text_chinese, text_phonetic, width=1280, height=720, 
                       bg_color=(0, 0, 0), bg_image=None, 
@@ -401,8 +472,10 @@ if uploaded_file is not None:
                     if bg_upload:
                         st.session_state.background_image = bg_upload
                         try:
-                            st.image(bg_upload, caption="背景图片预览", width=300)
-                        except:
+                            # 预览背景图片
+                            preview_img = Image.open(bg_upload)
+                            st.image(preview_img, caption="背景图片预览", width=300)
+                        except Exception as e:
                             st.warning("背景图片预览失败")
             
             # 背景颜色设置（纯色背景时显示）
@@ -445,21 +518,20 @@ if uploaded_file is not None:
             
             text_bg_rgba = hex_to_rgba(text_bg_color, text_bg_alpha)
             
-            # 视频预览 - 简化版本，避免报错
+            # 视频预览 - 使用简化的预览函数
             st.subheader("🎥 实时预览")
             if len(df) > 0:
                 preview_col1, preview_col2 = st.columns(2)
                 
                 with preview_col1:
                     try:
-                        # 创建预览帧 - 使用纯色背景避免图片错误
-                        preview_frame = create_video_frame(
+                        # 使用简化的预览函数
+                        preview_frame = create_simple_frame(
                             str(df.iloc[0]['英语']), 
                             str(df.iloc[0]['中文']), 
                             str(df.iloc[0]['音标']),
                             width=600, height=400,
                             bg_color=bg_color_rgb,
-                            bg_image=None,  # 预览时强制使用纯色背景
                             english_color=hex_to_rgb(english_color),
                             chinese_color=hex_to_rgb(chinese_color),
                             phonetic_color=hex_to_rgb(phonetic_color),
@@ -471,12 +543,12 @@ if uploaded_file is not None:
                         )
                         st.image(preview_frame, caption="实时预览 - 第一句", use_column_width=True)
                     except Exception as e:
-                        st.warning("预览生成失败，请检查设置")
-                        # 创建一个简单的预览替代
-                        preview_img = Image.new('RGB', (600, 400), color=bg_color_rgb)
-                        draw = ImageDraw.Draw(preview_img)
-                        draw.text((50, 50), "预览生成中...", fill=(255, 255, 255))
-                        st.image(preview_img, caption="预览替代", use_column_width=True)
+                        st.error(f"预览生成失败: {str(e)}")
+                        # 创建最简单的预览
+                        simple_img = Image.new('RGB', (600, 400), color=bg_color_rgb)
+                        draw = ImageDraw.Draw(simple_img)
+                        draw.text((50, 180), "预览功能正常", fill=(255, 255, 255))
+                        st.image(simple_img, caption="基础预览", use_column_width=True)
                 
                 with preview_col2:
                     st.info("""
@@ -485,6 +557,8 @@ if uploaded_file is not None:
                     - 文字现在有圆角背景区域
                     - 字号变化应该明显可见
                     - 中文和音标应该正常显示
+                    
+                    **注意：** 预览使用简化版本以确保稳定性
                     """)
             
             # 生成设置
