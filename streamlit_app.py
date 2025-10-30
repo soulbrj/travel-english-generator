@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import imageio.v2 as imageio
 import tempfile
 import subprocess
@@ -136,6 +136,20 @@ def wrap_text(text, max_chars):
     
     return lines if lines else [""]
 
+def get_text_size(draw, text, font):
+    """获取文本尺寸的辅助函数"""
+    try:
+        # 尝试使用较新Pillow版本的textbbox方法
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1]
+    except AttributeError:
+        # 回退到旧版本的textsize方法
+        try:
+            return draw.textsize(text, font=font)
+        except:
+            # 如果都不可用，使用估算值
+            return len(text) * 20, 30
+
 def create_frame(english, chinese, phonetic, width=1280, height=720, 
                 bg_color=(0,0,0), bg_image=None,
                 eng_color=(255,255,255), chn_color=(0,255,255), pho_color=(255,255,0),
@@ -151,50 +165,104 @@ def create_frame(english, chinese, phonetic, width=1280, height=720,
     
     draw = ImageDraw.Draw(img)
     
+    # 尝试加载字体
+    try:
+        # 尝试加载中文字体
+        eng_font = ImageFont.truetype("arial.ttf", eng_size)
+        chn_font = ImageFont.truetype("simhei.ttf", chn_size)  # 黑体
+        pho_font = ImageFont.truetype("arial.ttf", pho_size)
+    except:
+        try:
+            # 回退到默认字体
+            eng_font = ImageFont.load_default()
+            chn_font = ImageFont.load_default()
+            pho_font = ImageFont.load_default()
+        except:
+            # 如果默认字体也不可用，创建虚拟字体对象
+            class DummyFont:
+                def __init__(self, size):
+                    self.size = size
+            eng_font = DummyFont(eng_size)
+            chn_font = DummyFont(chn_size)
+            pho_font = DummyFont(pho_size)
+    
     eng_lines = wrap_text(english, 30)
     chn_lines = wrap_text(chinese, 15)
     pho_lines = wrap_text(phonetic, 35) if phonetic and str(phonetic).strip().lower() not in ['nan', 'none', ''] else []
     
-    line_spacing = 10
+    line_spacing = 15
     total_height = 0
+    section_spacing = 25
     
-    total_height += len(eng_lines) * eng_size + line_spacing * max(0, len(eng_lines) - 1)
+    # 计算英语文本高度
+    for line in eng_lines:
+        w, h = get_text_size(draw, line, eng_font)
+        total_height += h
+    total_height += line_spacing * max(0, len(eng_lines) - 1)
     
+    # 计算中文文本高度
     if chn_lines:
-        total_height += 20 + len(chn_lines) * chn_size + line_spacing * max(0, len(chn_lines) - 1)
+        total_height += section_spacing
+        for line in chn_lines:
+            w, h = get_text_size(draw, line, chn_font)
+            total_height += h
+        total_height += line_spacing * max(0, len(chn_lines) - 1)
     
+    # 计算音标文本高度
     if pho_lines:
-        total_height += 15 + len(pho_lines) * pho_size + line_spacing * max(0, len(pho_lines) - 1)
+        total_height += section_spacing // 2
+        for line in pho_lines:
+            w, h = get_text_size(draw, line, pho_font)
+            total_height += h
+        total_height += line_spacing * max(0, len(pho_lines) - 1)
     
+    # 计算起始Y坐标（垂直居中）
     y = (height - total_height) // 2
     
+    # 绘制英语
     for line in eng_lines:
-        w = len(line) * eng_size // 2
-        h = eng_size
+        w, h = get_text_size(draw, line, eng_font)
         x = (width - w) // 2
+        
+        # 文本阴影
         shadow_color = (0, 0, 0)
-        draw.text((x+2, y+2), line, fill=shadow_color)
-        draw.text((x, y), line, fill=eng_color)
+        try:
+            draw.text((x+2, y+2), line, font=eng_font, fill=shadow_color)
+            draw.text((x, y), line, font=eng_font, fill=eng_color)
+        except:
+            # 如果字体绘制失败，使用基本绘制
+            draw.text((x, y), line, fill=eng_color)
+        
         y += h + line_spacing
     
+    # 绘制中文
     if chn_lines:
-        y += 10
+        y += section_spacing
         for line in chn_lines:
-            w = len(line) * chn_size // 2
-            h = chn_size
+            w, h = get_text_size(draw, line, chn_font)
             x = (width - w) // 2
-            draw.text((x+2, y+2), line, fill=shadow_color)
-            draw.text((x, y), line, fill=chn_color)
+            
+            try:
+                draw.text((x+2, y+2), line, font=chn_font, fill=shadow_color)
+                draw.text((x, y), line, font=chn_font, fill=chn_color)
+            except:
+                draw.text((x, y), line, fill=chn_color)
+            
             y += h + line_spacing
     
+    # 绘制音标
     if pho_lines:
-        y += 5
+        y += section_spacing // 2
         for line in pho_lines:
-            w = len(line) * pho_size // 2
-            h = pho_size
+            w, h = get_text_size(draw, line, pho_font)
             x = (width - w) // 2
-            draw.text((x+2, y+2), line, fill=shadow_color)
-            draw.text((x, y), line, fill=pho_color)
+            
+            try:
+                draw.text((x+2, y+2), line, font=pho_font, fill=shadow_color)
+                draw.text((x, y), line, font=pho_font, fill=pho_color)
+            except:
+                draw.text((x, y), line, fill=pho_color)
+            
             y += h + line_spacing
     
     return img
@@ -227,8 +295,8 @@ def create_sample_excel():
     return pd.DataFrame(sample_data)
 
 # 页面UI
-st.title("🎬 旅游英语视频生成器 - 离线版")
-st.markdown("生成包含英语句子、中文翻译和音标的学习视频（支持离线音频）")
+st.title("🎬 旅游英语视频生成器")
+st.markdown("生成包含英语句子、中文翻译和音标的学习视频")
 
 # 检查TTS支持
 tts_status = check_system_tts()
@@ -401,7 +469,6 @@ if df is not None and not df.empty:
                         imageio.mimsave(video_path, frames, fps=fps, quality=8)
                     except Exception as e:
                         st.error(f"视频保存失败: {str(e)}")
-                        # 使用 st.stop() 替代 return
                         st.stop()
                     
                     final_video_path = video_path
@@ -468,6 +535,7 @@ if df is not None and not df.empty:
                         
             except Exception as e:
                 st.error(f"生成失败: {str(e)}")
+                st.error("请检查控制台获取更多错误信息")
 else:
     st.info("👆 请先上传数据文件或使用示例数据")
 
