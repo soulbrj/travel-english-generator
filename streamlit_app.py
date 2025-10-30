@@ -5,7 +5,6 @@ import numpy as np
 from PIL import Image, ImageDraw
 import imageio.v2 as imageio
 import tempfile
-import base64
 import subprocess
 import platform
 
@@ -402,7 +401,8 @@ if df is not None and not df.empty:
                         imageio.mimsave(video_path, frames, fps=fps, quality=8)
                     except Exception as e:
                         st.error(f"视频保存失败: {str(e)}")
-                        return
+                        # 使用 st.stop() 替代 return
+                        st.stop()
                     
                     final_video_path = video_path
                     has_audio = False
