@@ -4,7 +4,8 @@
         "builder": "NIXPACKS"
     },
     "deploy": {
-        "startCommand": "streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true",
-        "restartPolicyType": "ON_FAILURE"
+        "startCommand": "pip install -r requirements.txt && streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0",
+        "restartPolicyType": "ON_FAILURE",
+        "numReplicas": 1
     }
 }
