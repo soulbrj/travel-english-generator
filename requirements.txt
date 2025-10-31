@@ -1,11 +1,9 @@
-# requirements.txt
 streamlit>=1.30.0
 pandas>=2.1.0
 openpyxl>=3.1.2
 Pillow>=10.1.0
 imageio>=2.33.0
-imageio[ffmpeg]>=2.33.0     # ✅ 确保 ffmpeg 插件可用
+imageio[ffmpeg]>=2.33.0
 numpy>=1.26.0
-gTTS>=2.4.0                 # ✅ Google TTS 语音合成功能
-pydub==0.25.1 
-audioop-lts>=0.0.4 
+edge-tts>=0.2.2
+pydub==0.25.1
