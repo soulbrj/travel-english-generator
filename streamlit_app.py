@@ -1,4 +1,3 @@
-# streamlit_app.py
 import streamlit as st
 import pandas as pd
 import os
@@ -11,6 +10,18 @@ from pydub import AudioSegment
 import subprocess
 import traceback
 import asyncio
+
+# 检查ffmpeg是否可用
+def check_ffmpeg():
+    ffmpeg_path = shutil.which('ffmpeg')  # 检查ffmpeg是否在PATH中
+    if not ffmpeg_path:
+        st.warning("未检测到 ffmpeg。请安装 ffmpeg 并确保 PATH 配置正确。")
+    else:
+        st.success(f"检测到 ffmpeg：{ffmpeg_path}")
+    return ffmpeg_path
+
+# 检查ffmpeg
+check_ffmpeg()  # 在应用启动时检查ffmpeg
 
 # edge-tts 用于多音色 TTS
 try:
@@ -31,9 +42,6 @@ if 'audio_available' not in st.session_state:
 # -----------------------
 # 工具函数
 # -----------------------
-def check_ffmpeg():
-    return shutil.which('ffmpeg') is not None
-
 def wrap_text(text, max_chars):
     if not text or str(text).strip().lower() == 'nan':
         return [""]
@@ -60,9 +68,7 @@ def wrap_text(text, max_chars):
     return lines
 
 def get_font(size):
-    # 尝试常见字体，失败则用默认
     try:
-        # 你可以把常见系统字体名或路径放在这里
         candidates = [
             "SimHei", "msyh.ttc", "NotoSansCJK-Regular.ttc",
             "WenQuanYi Micro Hei", "Arial Unicode MS", "DejaVuSans.ttf"
@@ -84,7 +90,6 @@ def create_frame(english, chinese, phonetic, width=1280, height=720,
     创建一帧图片
     顺序：英语（上） -> 音标（中） -> 中文（下）
     """
-    # 背景：若提供背景图则适配裁剪，否则纯色
     if bg_image:
         try:
             img = ImageOps.fit(bg_image.convert('RGB'), (width, height), Image.Resampling.LANCZOS)
@@ -162,7 +167,6 @@ def create_frame(english, chinese, phonetic, width=1280, height=720,
 # -----------------------
 # Edge TTS helpers
 # -----------------------
-# 一些推荐的 voices（你可以扩展）
 VOICE_OPTIONS = {
     "English - Female (US) - aria_us_female": "en-US-AriaNeural",
     "English - Female (US) - Jenny": "en-US-JennyNeural",
@@ -177,17 +181,10 @@ async def _edge_tts_save(ssml_text: str, voice_name: str, out_path: str):
     await communicator.save(out_path)
 
 def generate_edge_audio(text, voice, speed=1.0, out_path=None):
-    """
-    使用 edge-tts 生成音频，返回文件路径或 None（失败）
-    speed: 0.5 - 2.0 (1.0 为默认)
-    """
     if not EDGE_TTS_AVAILABLE:
         return None
-    # 将 speed 转换为百分比偏移，例如 1.2 -> +20%, 0.8 -> -20%
     pct = int((speed - 1.0) * 100)
     pct_str = f"{pct:+d}%"
-    # 生成 SSML，包裹 voice 与 prosody
-    # 注意：edge-tts 的 voice 参数也可以单独传入；此处把 voice 名称写在 <voice name='...'> 里
     ssml = f"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" \
            f"<voice name='{voice}'><prosody rate='{pct_str}'>{escape_xml(text)}</prosody></voice></speak>"
     if out_path is None:
@@ -201,7 +198,6 @@ def generate_edge_audio(text, voice, speed=1.0, out_path=None):
         return None
 
 def escape_xml(s: str):
-    # 防止文本包含特殊 xml 字符
     return (s.replace("&", "&amp;")
              .replace("<", "&lt;")
              .replace(">", "&gt;")
@@ -215,7 +211,6 @@ def merge_audio_files(audio_paths, target_duration):
     combined = AudioSegment.empty()
     for p in audio_paths:
         if not p:
-            # 补静音
             combined += AudioSegment.silent(duration=int(target_duration*1000))
             continue
         try:
@@ -270,8 +265,7 @@ else:
     st.warning("未检测到 edge-tts：多音色语音功能不可用。请运行 `pip install edge-tts` 并确保网络可用。")
 
 # 检查 ffmpeg
-if not check_ffmpeg():
-    st.warning("未检测到 ffmpeg。视频带音频需要 ffmpeg。请在系统安装 ffmpeg。")
+check_ffmpeg()  # 调用ffmpeg检测
 
 # 上传 Excel
 st.header("1. 上传 Excel 文件")
@@ -349,7 +343,6 @@ if df is not None:
         fps = st.slider("帧率", 8, 30, 20)
     with col_v2:
         width = st.selectbox("分辨率宽度", [640, 960, 1280], index=2)
-        # 高度 16:9
         height = int(width * 9 / 16)
 
     # 预览单行
