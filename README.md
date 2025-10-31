@@ -1,32 +1,28 @@
-# 🎬 旅游英语视频生成器
+# 旅行英语视频生成器 (Streamlit)
 
-基于Streamlit的在线英语学习视频生成工具，无需安装任何软件，直接在浏览器中使用。
+功能：
+- 上传 Excel（列名：英语、中文、音标）
+- 文字显示：英语（上）、音标（中）、中文（下），可调字号与颜色
+- 支持背景图或纯色背景
+- 多音色 TTS（edge-tts），可选择音色与语速
+- 生成带音频视频并支持下载
 
-## 🌐 在线访问
-https://your-app-name.streamlit.app/
+## 本地运行
+1. 克隆或下载本项目
+2. 创建虚拟环境并激活（推荐）
+3. 安装依赖：
+pip install -r requirements.txt
+4. 若需安装系统 ffmpeg（本地）：
+- Windows: 下载并安装 ffmpeg，添加到 PATH
+- macOS: `brew install ffmpeg`
+- Ubuntu: `sudo apt-get install ffmpeg`
+5. 运行：
+streamlit run streamlit_app.py
+6. 打开浏览器访问 http://localhost:8501
+## 部署
+- 可部署到 Railway / Streamlit Cloud 等，确保平台允许联网（edge-tts 需要联网）并安装 ffmpeg。
+- Railway 示例已包含 `railway.json` 与 `packages.txt`（包含 ffmpeg）。
 
-## ✨ 功能特性
-- 📁 一键上传Excel文件
-- 🎵 AI智能语音合成
-- 🎬 自动生成高清视频
-- 📝 专业字幕显示
-- 🌐 完全在线使用
-- 🎨 自定义背景与文字样式
-- 🎞️ 支持多种视频分辨率
-
-## 📋 使用要求
-Excel文件必须包含以下三列：
-- 英语
-- 中文  
-- 音标
-
-## 🔧 本地部署
-1. 克隆仓库
-2. 安装依赖：`pip install -r requirements.txt`
-3. 安装ffmpeg（必要组件）
-4. 启动应用：`streamlit run streamlit_app.py`
-
-## ⚠️ 注意事项
-- 单个Excel文件大小限制为10MB
-- 确保系统安装了中文字体以正常显示中文
-- 音频功能需要ffmpeg支持
+## 注意
+- edge-tts 需要联网访问微软服务以生成音频。
+- 生成高分辨率视频、大数量行时可能占用较多内存，建议先用少量行测试。
