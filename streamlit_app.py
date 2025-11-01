@@ -1063,3 +1063,68 @@ with st.sidebar:
     
     with st.expander("📝 数据格式要求", expanded=True):
         st.markdown("""
+        Excel 文件必须包含以下列：
+        - **英语**: 英文句子
+        - **中文**: 中文翻译  
+        - **音标**: 音标标注（可选）
+        """)
+    
+    with st.expander("🎵 音频设置说明"):
+        st.markdown("""
+        - **播放顺序**: 设置4段音频的播放顺序
+        - **音色选择**: 为不同语言选择合适音色
+        - **语速调节**: 0.5x-2.0x 可调
+        - **停顿时间**: 每组之间的间隔
+        """)
+    
+    with st.expander("🎨 样式设置提示"):
+        st.markdown("""
+        - **背景**: 纯色或自定义图片
+        - **文字**: 支持中英文和音标
+        - **背景区域**: 增强文字可读性
+        - **字体**: 自动适配最佳字体
+        - **间距**: 可调节文字间距离
+        """)
+    
+    with st.expander("⚙️ 系统要求"):
+        st.markdown("""
+        - **网络**: 需要联网使用 TTS 服务
+        - **浏览器**: 建议使用 Chrome/Firefox
+        - **数据量**: 建议每次不超过50行
+        - **处理时间**: 根据数据量可能需要几分钟
+        """)
+
+    # 系统状态显示
+    st.markdown("---")
+    st.markdown("## 🔧 系统状态")
+    
+    # 检查 ffmpeg 状态
+    ffmpeg_status = check_ffmpeg()
+    if ffmpeg_status:
+        st.success("✅ FFmpeg 可用")
+    else:
+        st.error("❌ FFmpeg 未找到")
+    
+    # 检查 edge-tts 状态
+    if EDGE_TTS_AVAILABLE:
+        st.success("✅ Edge-TTS 可用")
+    else:
+        st.warning("⚠️ Edge-TTS 不可用")
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align: center; color: #666;'>"
+        "🎬 旅行英语视频生成器 | 专业级多音色视频制作工具"
+        "</div>", 
+        unsafe_allow_html=True
+    )
+
+    # 隐藏 Streamlit 默认菜单和页脚
+    hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display:none;}
+    </style>
+    """
+    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
