@@ -10,7 +10,6 @@ import subprocess
 import traceback
 import asyncio
 import base64
-import pkg_resources
 
 # 检查 ffmpeg 是否可用（静默模式）
 def check_ffmpeg():
@@ -808,7 +807,7 @@ if df is not None:
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.markdown("**英语设置**")
-                eng_color = st.color_picker("颜色", "#0C0404", key="eng_color")
+                eng_color = st.color_picker("颜色", "#FFFFFF", key="eng_color")
                 eng_color = tuple(int(eng_color[i:i+2],16) for i in (1,3,5))
                 eng_size = st.slider("字号", 20, 120, 80, key="eng_size")
             with c2:
@@ -818,7 +817,7 @@ if df is not None:
                 pho_size = st.slider("字号", 16, 100, 50, key="pho_size")
             with c3:
                 st.markdown("**中文设置**")
-                chn_color = st.color_picker("颜色", "#0C0404", key="chn_color")
+                chn_color = st.color_picker("颜色", "#ADD8E6", key="chn_color")
                 chn_color = tuple(int(chn_color[i:i+2],16) for i in (1,3,5))
                 chn_size = st.slider("字号", 20, 120, 60, key="chn_size")
             
@@ -912,9 +911,9 @@ if df is not None:
         if text_bg_enabled:
             col_bg_size1, col_bg_size2 = st.columns(2)
             with col_bg_size1:
-                text_bg_width = st.slider("文字背景宽度", 520, 1600, 1400)
+                text_bg_width = st.slider("文字背景宽度", 520, 1600, 1000)
             with col_bg_size2:
-                text_bg_height = st.slider("文字背景高度", 200, 800, 520)
+                text_bg_height = st.slider("文字背景高度", 200, 800, 400)
                 
             text_bg_hex = st.color_picker("文字背景颜色", "#FFFFFF", key="text_bg_color")
             text_bg_rgb = tuple(int(text_bg_hex[i:i+2],16) for i in (1,3,5))
@@ -1110,21 +1109,22 @@ with st.sidebar:
         st.success("✅ Edge-TTS 可用")
     else:
         st.warning("⚠️ Edge-TTS 不可用")
-    st.markdown("---")
-    st.markdown(
-        "<div style='text-align: center; color: #666;'>"
-        "🎬 旅行英语视频生成器 | 专业级多音色视频制作工具"
-        "</div>", 
-        unsafe_allow_html=True
-    )
 
-    # 隐藏 Streamlit 默认菜单和页脚
-    hide_streamlit_style = """
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stDeployButton {display:none;}
-    </style>
-    """
-    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+# 页脚
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; color: #666;'>"
+    "🎬 旅行英语视频生成器 | 专业级多音色视频制作工具"
+    "</div>", 
+    unsafe_allow_html=True
+)
 
+# 隐藏 Streamlit 默认菜单和页脚
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.stDeployButton {display:none;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
