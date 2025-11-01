@@ -1087,28 +1087,11 @@ with st.sidebar:
     
     with st.expander("⚙️ 系统要求"):
         st.markdown("""
-        - **网络**: 需要联网使用 TTS 服务
+        - **网络**: 需要联网
         - **浏览器**: 建议使用 Chrome/Firefox
         - **数据量**: 建议每次不超过50行
         - **处理时间**: 根据数据量可能需要几分钟
         """)
-
-    # 系统状态显示
-    st.markdown("---")
-    st.markdown("## 🔧 系统状态")
-    
-    # 检查 ffmpeg 状态
-    ffmpeg_status = check_ffmpeg()
-    if ffmpeg_status:
-        st.success("✅ FFmpeg 可用")
-    else:
-        st.error("❌ FFmpeg 未找到")
-    
-    # 检查 edge-tts 状态
-    if EDGE_TTS_AVAILABLE:
-        st.success("✅ Edge-TTS 可用")
-    else:
-        st.warning("⚠️ Edge-TTS 不可用")
 
 # 页脚
 st.markdown("---")
@@ -1128,3 +1111,4 @@ footer {visibility: hidden;}
 </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
