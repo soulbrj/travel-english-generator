@@ -823,13 +823,18 @@ def merge_video_audio(video_path, audio_path, output_path):
         return None
 
 # -----------------------
-# 优化的视频生成函数 - 修复重复进度条问题
+# 优化的视频生成函数 - 支持上传音频（模式B）
 # -----------------------
-def generate_video_with_optimization(df, settings, progress_bar, status_placeholder):
+def generate_video_with_optimization(df, settings, progress_bar, status_placeholder, uploaded_audio_map=None):
+    """
+    uploaded_audio_map: dict mapping keys like "1-1" -> bytes or temp file path
+      - If value is bytes, we will write to temp file per use.
+      - If value is a file path, we will use directly.
+    """
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             video_no_audio = os.path.join(tmpdir, "video_no_audio.mp4")
-            final_video = os.path.join(tmpdir, "final_video.mp4")
+            final_video = os.path.join(tmpdir, "output_video.mp4")  # final filename as requested
             
             width = settings['width']
             height = settings['height']
@@ -867,27 +872,47 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
             
             writer = None
             audio_paths = []
+            temp_uploaded_files = []  # to cleanup any bytes->file written
             
             try:
-                # 先预生成所有音频
-                status_placeholder.info("🎵 正在生成音频...")
+                # 先预处理所有音频（优先使用 uploaded_audio_map）
+                status_placeholder.info("🎵 正在准备音频（优先使用上传音频）...")
                 for i, row in df.iterrows():
                     eng = str(row['英语'])
                     chn = str(row['中文'])
                     
                     for j, segment_type in enumerate(segment_order):
-                        voice, text_type = voice_mapping[segment_type]
-                        text_to_speak = eng if text_type == "english" else chn
+                        # determine expected uploaded key: rows are 1-indexed in naming
+                        key = f"{i+1}-{j+1}"
+                        uploaded_path = None
+                        if uploaded_audio_map and key in uploaded_audio_map:
+                            val = uploaded_audio_map[key]
+                            if isinstance(val, bytes):
+                                # 写入临时文件
+                                uf = os.path.join(tmpdir, f"uploaded_{key}.mp3")
+                                with open(uf, "wb") as f:
+                                    f.write(val)
+                                uploaded_path = uf
+                                temp_uploaded_files.append(uf)
+                            elif isinstance(val, str) and os.path.exists(val):
+                                uploaded_path = val
+                        if uploaded_path:
+                            audio_paths.append(uploaded_path)
+                        else:
+                            # 没有上传音频，则尝试 TTS 生成（可能为 None）
+                            voice, text_type = voice_mapping[segment_type]
+                            text_to_speak = eng if text_type == "english" else chn
+                            # create temp file for tts
+                            tts_tmp = os.path.join(tmpdir, f"tts_{i+1}_{j+1}.mp3")
+                            tts_res = generate_edge_audio(text_to_speak, voice, speed=tts_speed, out_path=tts_tmp)
+                            audio_paths.append(tts_res)  # may be None
                         
-                        audio_file = generate_edge_audio(text_to_speak, voice, speed=tts_speed)
-                        audio_paths.append(audio_file)
-                        
-                        # 更新音频生成进度
+                        # 更新音频生成进度（0-0.3）
                         audio_progress = (i * len(segment_order) + j + 1) / (len(df) * len(segment_order)) * 0.3
                         progress_bar.progress(audio_progress)
                 
-                # 生成视频帧
-                status_placeholder.info("🎬 正在生成视频...")
+                # 生成视频帧（无声视频）
+                status_placeholder.info("🎬 正在生成视频帧...")
                 writer = imageio.get_writer(video_no_audio, fps=fps, macro_block_size=1, format='FFMPEG', codec='libx264')
                 
                 for i, row in df.iterrows():
@@ -949,6 +974,8 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
             status_placeholder.info("🔊 正在合并音频...")
             progress_bar.progress(0.85)
             
+            # 此处 audio_paths 列表长度为 len(df) * len(segment_order)
+            # 若存在有效文件则合并，否则使用无声视频
             if any(p for p in audio_paths if p is not None) and check_ffmpeg():
                 combined_audio_path = merge_audio_files(audio_paths, per_duration, pause_duration)
                 if combined_audio_path and os.path.exists(combined_audio_path) and os.path.getsize(combined_audio_path) > 0:
@@ -964,12 +991,13 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                         st.warning("音频合并失败，将使用无声视频")
                         final_video = video_no_audio
                 else:
-                    st.warning("音频生成失败，将使用无声视频")
+                    st.warning("音频生成失败或合并失败，将使用无声视频")
                     final_video = video_no_audio
             else:
-                st.warning("无法生成音频，将使用无声视频")
+                st.warning("未检测到有效音频文件，生成无声视频")
                 final_video = video_no_audio
             
+            # 读取最终文件
             if os.path.exists(final_video) and os.path.getsize(final_video) > 0:
                 with open(final_video, "rb") as f:
                     video_bytes = f.read()
@@ -984,10 +1012,10 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
         return None
 
 # -----------------------
-# UI 与主流程（保持原样）
+# UI 与主流程（保留所有功能并加入上传音频）
 # -----------------------
-st.markdown('<h1 class="main-header">🎬 旅行英语视频生成器</h1>', unsafe_allow_html=True)
-st.markdown("### 多音色循环播放 • 专业级视频制作")
+st.markdown('<h1 class="main-header">🎬 旅行英语视频生成器（离线音频支持）</h1>', unsafe_allow_html=True)
+st.markdown("### 多音色循环播放 • 支持上传每行4段音频（命名：行号-段号，例如 1-1.mp3）")
 
 # 上传 Excel
 st.markdown('<div class="section-header">📁 1. 上传数据文件</div>', unsafe_allow_html=True)
@@ -1019,19 +1047,15 @@ if df is not None:
     st.markdown('<div class="preview-section">', unsafe_allow_html=True)
     st.subheader("📊 数据预览")
     st.dataframe(df.head(10), height=220, use_container_width=True)
-    st.info(f"📈 共 {len(df)} 行数据，预计生成 {len(df) * 4} 段音频")
+    st.info(f"📈 共 {len(df)} 行数据，若使用上传音频请按规则上传每行4段音频（例如：1-1.mp3, 1-2.mp3, 1-3.mp3, 1-4.mp3）")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 设置面板 - 修复空白框问题
+    # 设置面板
     st.markdown('<div class="section-header">🎨 2. 自定义设置</div>', unsafe_allow_html=True)
-    
-    # 使用标签页组织设置 - 移除不必要的空白
     tab1, tab2, tab3, tab4 = st.tabs(["🎨 样式设置", "🔊 音频设置", "📝 文字背景", "⚙️ 视频参数"])
     
     with tab1:
-        # 使用紧凑布局
         col_bg, col_txt = st.columns([1, 2])
-        
         with col_bg:
             st.subheader("🎨 背景设置")
             bg_type = st.radio("背景类型", ["纯色", "图片"], horizontal=True, key="bg_type")
@@ -1070,8 +1094,6 @@ if df is not None:
                 chn_size = st.slider("字号", 20, 120, 60, key="chn_size")
             
             bold_text = st.checkbox("文字加粗", value=True, key="bold_text")
-            
-            # 文字间距设置 - 紧凑布局
             st.markdown("---")
             st.subheader("📏 文字间距设置")
             col_spacing1, col_spacing2, col_spacing3 = st.columns(3)
@@ -1084,7 +1106,6 @@ if df is not None:
 
     with tab2:
         st.subheader("🔊 播放顺序设置")
-        
         col_order1, col_order2, col_order3, col_order4 = st.columns(4)
         with col_order1:
             segment1_type = st.selectbox("第1段", ["英文男声", "英文女声", "中文音色"], index=0, key="segment1")
@@ -1094,14 +1115,11 @@ if df is not None:
             segment3_type = st.selectbox("第3段", ["英文男声", "英文女声", "中文音色"], index=2, key="segment3")
         with col_order4:
             segment4_type = st.selectbox("第4段", ["英文男声", "英文女声", "中文音色"], index=0, key="segment4")
-        
         st.markdown(f'<div class="success-card">🎵 播放顺序：{segment1_type} → {segment2_type} → {segment3_type} → {segment4_type}</div>', unsafe_allow_html=True)
 
         st.subheader("🎙️ 音色选择与试听")
-        
         col_voice1, col_voice2, col_voice3 = st.columns(3)
-        
-        # 预定义音色列表（你可以按需增减）
+        # 预定义音色列表
         VOICE_OPTIONS = {
             "English - Female (US) - Aria": "en-US-AriaNeural",
             "English - Female (US) - Jenny": "en-US-JennyNeural",
@@ -1135,13 +1153,12 @@ if df is not None:
             "Chinese - Male (TW) - YunJhe": "zh-TW-YunJheNeural",
             "Chinese - Male (TW) - YunSong": "zh-TW-YunSongNeural"
         }
-        
+
         with col_voice1:
             st.markdown("**英文男声**")
             male_english_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Male" in k and "English" in k}
             male_english_label = st.selectbox("选择男声音色", list(male_english_voices.keys()), index=2, key="male_voice")
             male_english_voice = male_english_voices[male_english_label]
-            
             if st.button("🎧 试听男声", key="preview_male_english"):
                 preview_text = "Hello, this is a preview of the male English voice."
                 audio_bytes = preview_voice(male_english_voice, preview_text, tts_speed if 'tts_speed' in locals() else 1.0)
@@ -1155,7 +1172,6 @@ if df is not None:
             female_english_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Female" in k and "English" in k}
             female_english_label = st.selectbox("选择女声音色", list(female_english_voices.keys()), index=2, key="female_voice")
             female_english_voice = female_english_voices[female_english_label]
-            
             if st.button("🎧 试听女声", key="preview_female_english"):
                 preview_text = "Hello, this is a preview of the female English voice."
                 audio_bytes = preview_voice(female_english_voice, preview_text, tts_speed if 'tts_speed' in locals() else 1.0)
@@ -1169,7 +1185,6 @@ if df is not None:
             chinese_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Chinese" in k}
             chinese_label = st.selectbox("选择中文音色", list(chinese_voices.keys()), index=0, key="chinese_voice")
             chinese_voice = chinese_voices[chinese_label]
-            
             if st.button("🎧 试听中文", key="preview_chinese"):
                 preview_text = "你好，这是中文音色的预览。"
                 audio_bytes = preview_voice(chinese_voice, preview_text, tts_speed if 'tts_speed' in locals() else 1.0)
@@ -1194,7 +1209,6 @@ if df is not None:
                 text_bg_width = st.slider("文字背景宽度", 520, 1600, 1000, key="text_bg_width")
             with col_bg_size2:
                 text_bg_height = st.slider("文字背景高度", 200, 800, 400, key="text_bg_height")
-                
             text_bg_hex = st.color_picker("文字背景颜色", "#FFFFFF", key="text_bg_color")
             text_bg_rgb = tuple(int(text_bg_hex[i:i+2],16) for i in (1,3,5))
             text_bg_alpha = st.slider("文字背景透明度", 0, 255, 180, key="text_bg_alpha")
@@ -1219,20 +1233,45 @@ if df is not None:
             height = int(width * 9 / 16)
             st.info(f"分辨率: {width} × {height}")
 
+    # 上传音频（模式B：每行4段）
+    st.markdown('<div class="section-header">📥 上传音频（模式B：每行4段）</div>', unsafe_allow_html=True)
+    st.markdown("请将每行的 4 段音频按命名规则上传：`行号-段号.mp3`，例如 `1-1.mp3`, `1-2.mp3`, `1-3.mp3`, `1-4.mp3`。若缺少文件会自动补静音。")
+    uploaded_audio_files = st.file_uploader("上传 MP3 音频（可多选）", type=["mp3"], accept_multiple_files=True, help="命名示例：1-1.mp3", key="audio_uploader")
+
+    # 解析上传文件为 map
+    uploaded_audio_map = {}
+    if uploaded_audio_files:
+        for f in uploaded_audio_files:
+            name = f.name.strip()
+            key = None
+            # 解析类似 1-1.mp3 或 01-02.MP3 等
+            base = os.path.splitext(name)[0]
+            base_lower = base.lower()
+            # accept patterns like '1-1' or '01-02'
+            if '-' in base_lower:
+                parts = base_lower.split('-')
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    key = f"{int(parts[0])}-{int(parts[1])}"
+            if key:
+                try:
+                    data = f.read()
+                    uploaded_audio_map[key] = data  # store bytes, will be written later
+                except Exception as e:
+                    st.warning(f"读取上传文件 {name} 失败: {e}")
+            else:
+                st.warning(f"忽略不符合命名规则的文件: {name}")
+
     # 预览单行
     st.markdown('<div class="section-header">👁️ 3. 预览效果</div>', unsafe_allow_html=True)
-    
     if not df.empty:
         st.markdown('<div class="preview-section">', unsafe_allow_html=True)
         col_preview1, col_preview2 = st.columns([1, 2])
-        
         with col_preview1:
             idx = st.slider("选择预览行", 0, min(len(df)-1, 9), 0, key="preview_row")
             row = df.iloc[idx]
             st.write(f"**英语:** {row['英语']}")
             st.write(f"**音标:** {row['音标'] if pd.notna(row['音标']) else '无'}")
             st.write(f"**中文:** {row['中文']}")
-        
         with col_preview2:
             preview_img = create_frame(
                 english=str(row['英语']),
@@ -1256,31 +1295,25 @@ if df is not None:
             st.image(preview_img, caption="帧预览", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # 生成按钮 - 修复重复进度条问题
+    # 生成按钮
     st.markdown('<div class="section-header">🚀 4. 生成视频</div>', unsafe_allow_html=True)
-    
     if len(df) > 20:
         st.markdown(f'<div class="warning-card">⚠️ 数据量较大（{len(df)} 行），生成可能需要一些时间。建议分批处理或减少每段音频时长。</div>', unsafe_allow_html=True)
-    
+
     col_gen1, col_gen2, col_gen3 = st.columns([1, 2, 1])
     with col_gen2:
         if st.button("🎬 开始生成视频", use_container_width=True, key="generate_button"):
-            # 创建状态占位符和单一进度条
             status_placeholder = st.empty()
             progress_bar = st.progress(0)
-            
-            with st.spinner("🎥 正在生成视频 - 会为每行生成4段音频，请耐心等待..."):
+            with st.spinner("🎥 正在生成视频，请稍候..."):
                 # 创建语音类型到实际语音的映射
                 voice_mapping = {
-                    "英文男声": (male_english_voice, "english"),
-                    "英文女声": (female_english_voice, "english"), 
-                    "中文音色": (chinese_voice, "chinese")
+                    "英文男声": (male_english_voice, "english") if 'male_english_voice' in locals() else ("en-US-GuyNeural", "english"),
+                    "英文女声": (female_english_voice, "english") if 'female_english_voice' in locals() else ("en-US-AriaNeural", "english"),
+                    "中文音色": (chinese_voice, "chinese") if 'chinese_voice' in locals() else ("zh-CN-XiaoxiaoNeural", "chinese")
                 }
-                
-                # 获取播放顺序
                 segment_order = [segment1_type, segment2_type, segment3_type, segment4_type]
-                
-                # 收集所有设置
+
                 settings = {
                     'width': width,
                     'height': height,
@@ -1309,23 +1342,19 @@ if df is not None:
                     'pho_chn_spacing': pho_chn_spacing,
                     'line_spacing': line_spacing
                 }
-                
-                # 使用优化的生成函数
-                video_bytes = generate_video_with_optimization(df, settings, progress_bar, status_placeholder)
-                
+
+                # 调用生成函数，传入 uploaded_audio_map
+                video_bytes = generate_video_with_optimization(df, settings, progress_bar, status_placeholder, uploaded_audio_map=uploaded_audio_map)
+
                 if video_bytes:
                     status_placeholder.success("✅ 视频生成完成！")
-                    
-                    # 显示视频和下载按钮
                     col_vid1, col_vid2, col_vid3 = st.columns([1, 2, 1])
                     with col_vid2:
                         st.video(video_bytes)
-                        
-                        # 下载按钮
                         st.download_button(
                             label="📥 下载视频",
                             data=video_bytes,
-                            file_name="travel_english_video.mp4",
+                            file_name="output_video.mp4",
                             mime="video/mp4",
                             use_container_width=True,
                             key="download_button"
@@ -1336,7 +1365,6 @@ if df is not None:
 # 侧边栏信息
 with st.sidebar:
     st.markdown("## ℹ️ 使用指南")
-    
     with st.expander("📝 数据格式要求", expanded=True):
         st.markdown("""
         Excel 文件必须包含以下列：
@@ -1344,37 +1372,28 @@ with st.sidebar:
         - **中文**: 中文翻译  
         - **音标**: 音标标注（可选）
         """)
-    
+    with st.expander("📥 上传音频（模式B）说明"):
+        st.markdown("""
+        - 命名格式：`行号-段号.mp3`（例如：`1-1.mp3`, `1-2.mp3`, `1-3.mp3`, `1-4.mp3`）
+        - 每行可上传 4 段音频（按播放顺序）。若缺失文件会自动以静音填充。
+        - 上传的文件数量可以少于总段数，系统会自动匹配并补静音。
+        """)
     with st.expander("🎵 音频设置说明"):
         st.markdown("""
-        - **播放顺序**: 设置4段音频的播放顺序
-        - **音色选择**: 为不同语言选择合适音色
-        - **语速调节**: 0.5x-2.0x 可调
-        - **停顿时间**: 每组之间的间隔
+        - 试听按钮使用 edge-tts（若环境联网）。若部署环境无外网，则试听和在线 TTS 将不可用。
         """)
-    
-    with st.expander("🎨 样式设置提示"):
-        st.markdown("""
-        - **背景**: 纯色或自定义图片
-        - **文字**: 支持中英文和音标
-        - **背景区域**: 增强文字可读性
-        - **字体**: 自动适配最佳字体
-        - **间距**: 可调节文字间距离
-        """)
-    
     with st.expander("⚙️ 系统要求"):
         st.markdown("""
-        - **网络**: 需要联网（若部署平台限制外网，请使用本地生成音频或 Azure Key）
-        - **浏览器**: 建议使用 Chrome/Firefox
-        - **数据量**: 建议每次不超过50行
-        - **处理时间**: 根据数据量可能需要几分钟
+        - **ffmpeg**: 必须可用（Railway 可通过 packages.txt 安装）。
+        - **网络**: 若需要在线 TTS（试听/自动生成音频），部署环境需能访问微软语音服务；否则请使用上传音频模式或本地运行。
+        - **数据量**: 建议每次不超过50行以避免超时/内存问题。
         """)
-    
+
 # 页脚
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "🎬 旅行英语视频生成器 | 专业级多音色视频制作工具"
+    "🎬 旅行英语视频生成器 | 支持离线上传音频（模式B），输出文件：output_video.mp4"
     "</div>", 
     unsafe_allow_html=True
 )
