@@ -922,20 +922,22 @@ def main():
             cleanup_temp_files()
     else:
         st.markdown('<div class="info-card">请在左侧上传包含"英语"和"中文"列的Excel文件开始生成视频</div>', unsafe_allow_html=True)
+        # 找到对应的markdown块，确保三引号正确闭合
         st.markdown("""
         ### 使用说明
         1. 准备Excel文件，包含以下列：
-           - 英语：需要显示的英文文本
-           - 中文：对应的中文翻译
-           - 音标（可选）：英文的音标
-        
+       - 英语：需要显示的英文文本
+       - 中文：对应的中文翻译
+       - 音标（可选）：英文的音标
+
         2. 配置视频参数，包括背景、字体大小、颜色等
-        
+
         3. 点击"生成视频"按钮开始生成
-        
+
         4. 生成完成后可下载视频文件
-        
+
         ### 依赖安装
         如果运行出错，请先安装依赖：
         ```bash
         pip install streamlit pandas pillow imageio edge-tts openpyxl
+
