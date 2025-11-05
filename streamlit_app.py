@@ -325,11 +325,13 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
                  text_bg_enabled=False, text_bg_color=(255,255,255,180), text_bg_padding=20,
                  text_bg_radius=30, text_bg_width=None, text_bg_height=None,
                  bold_text=True, eng_pho_spacing=30, pho_chn_spacing=30, line_spacing=15):
-    """创建一帧图片"""
+    """创建一帧图片（修复ImageDraw作用域）"""
+    from PIL import ImageDraw  # 显式导入确保作用域正确
     if bg_image:
         try:
             img = ImageOps.fit(bg_image.convert('RGB'), (width, height), Image.Resampling.LANCZOS)
-        except Exception:
+        except Exception as e:
+            st.warning(f"背景图片处理失败，使用纯色背景: {str(e)}")
             img = Image.new('RGB', (width, height), bg_color)
     else:
         img = Image.new('RGB', (width, height), bg_color)
@@ -342,7 +344,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
 
     eng_lines = wrap_text(english, 40)
     chn_lines = wrap_text(chinese, 20)
-    pho_lines = wrap_text(phonetic, 45) if phonetic else []
+    pho_lines = wrap_text(phonetic, 45) if phonetic and str(phonetic).strip() else []
 
     total_height = 0
 
@@ -354,7 +356,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
     total_height += line_spacing * (len(eng_lines)-1)
 
     # 计算音标部分高度
-    if pho_lines:
+    if pho_lines and pho_lines[0].strip():
         total_height += eng_pho_spacing  # 使用可调节的英语-音标间距
         for line in pho_lines:
             bbox = draw.textbbox((0,0), line, font=pho_font)
@@ -383,7 +385,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
             w = bbox[2] - bbox[0]
             max_width = max(max_width, w)
             
-        if pho_lines:
+        if pho_lines and pho_lines[0].strip():
             for line in pho_lines:
                 bbox = draw.textbbox((0,0), line, font=pho_font)
                 w = bbox[2] - bbox[0]
@@ -409,9 +411,8 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
             bg_h = min(bg_h, text_bg_height + 2 * text_bg_padding)
         
         # 绘制圆角矩形背景
-        from PIL import ImageDraw
-        draw = ImageDraw.Draw(img, "RGBA")
-        draw.rounded_rectangle(
+        draw_rgba = ImageDraw.Draw(img, "RGBA")
+        draw_rgba.rounded_rectangle(
             [bg_x, bg_y, bg_x + bg_w, bg_y + bg_h],
             radius=text_bg_radius,
             fill=text_bg_color
@@ -429,7 +430,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
         current_y += h + line_spacing
 
     # 绘制音标
-    if pho_lines:
+    if pho_lines and pho_lines[0].strip():
         current_y += eng_pho_spacing - line_spacing  # 减去额外的line_spacing
         for line in pho_lines:
             bbox = draw.textbbox((0,0), line, font=pho_font)
@@ -454,6 +455,20 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
 # 生成音频函数（使用edge-tts）
 async def generate_audio(text, voice, rate, output_path):
     try:
+        # 过滤空文本
+        text = text.strip()
+        if not text:
+            st.warning("音频文本为空，生成静音文件")
+            # 创建一个空的MP3文件（实际可播放的静音文件）
+            import wave
+            import struct
+            with wave.open(output_path, 'w') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(16000)
+                wav_file.writeframes(struct.pack('h', 0))
+            return True
+            
         communicate = edge_tts.Communicate(text, voice, rate=rate)
         await communicate.save(output_path)
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
@@ -464,7 +479,7 @@ async def generate_audio(text, voice, rate, output_path):
         st.error(f"音频生成错误: {str(e)}")
         return False
 
-# 生成视频函数（增强版）
+# 生成视频函数（增强版，修复路径和错误处理）
 def generate_video(frames_dir, audio_path, output_path, fps=1, ffmpeg_path=None):
     if not ffmpeg_path:
         ffmpeg_path = check_ffmpeg()
@@ -480,45 +495,94 @@ def generate_video(frames_dir, audio_path, output_path, fps=1, ffmpeg_path=None)
         st.error(f"音频文件不存在: {audio_path}")
         return None
     
+    # 检查音频文件大小
+    if os.path.getsize(audio_path) == 0:
+        st.warning("音频文件为空，将生成无声视频")
+        # 创建一个1秒的静音音频避免FFmpeg错误
+        import wave
+        import struct
+        with wave.open(audio_path, 'w') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(struct.pack('h', 0) * 16000)
+    
     # 检查帧目录是否存在且有文件
-    frame_files = [f for f in os.listdir(frames_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
+    frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
     if not frame_files:
         st.error(f"未找到帧图片文件在目录: {frames_dir}")
         return None
+    
+    # 验证帧文件命名格式
+    try:
+        # 检查是否是数字命名
+        frame_numbers = []
+        for f in frame_files:
+            filename = os.path.splitext(f)[0]
+            if filename.isdigit():
+                frame_numbers.append(int(filename))
         
-    # 构建FFmpeg命令
-    frame_pattern = os.path.join(frames_dir, "%04d.png")  # 假设帧文件命名为0001.png, 0002.png等
+        if not frame_numbers:
+            st.warning("帧文件命名不符合数字格式，重新命名...")
+            # 重新命名帧文件为0001.png, 0002.png格式
+            for i, f in enumerate(frame_files):
+                ext = os.path.splitext(f)[1]
+                new_name = f"{i+1:04d}{ext}"
+                os.rename(os.path.join(frames_dir, f), os.path.join(frames_dir, new_name))
+    except Exception as e:
+        st.warning(f"帧文件重命名失败: {str(e)}")
+        return None
+        
+    # 构建FFmpeg命令（使用绝对路径）
+    frame_pattern = os.path.abspath(os.path.join(frames_dir, "%04d.png"))
+    audio_path = os.path.abspath(audio_path)
+    output_path = os.path.abspath(output_path)
+    
     cmd = [
-        ffmpeg_path, '-y',
+        ffmpeg_path, '-y',  # 覆盖输出文件
         '-framerate', str(fps),
         '-i', frame_pattern,
         '-i', audio_path,
         '-c:v', 'libx264',
+        '-preset', 'fast',  # 平衡速度和质量
+        '-crf', '23',  # 质量参数，越低越好
         '-c:a', 'aac',
-        '-strict', 'experimental',
-        '-shortest',
+        '-b:a', '192k',  # 音频比特率
+        '-shortest',  # 以较短的为准（音频或视频）
+        '-pix_fmt', 'yuv420p',  # 兼容所有播放器
         output_path
     ]
     
     # 执行命令并捕获输出
     try:
+        st.info(f"FFmpeg命令: {' '.join(cmd)}")
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True
+            text=True,
+            timeout=300  # 5分钟超时
         )
         
         # 检查是否有错误
         if result.returncode != 0:
-            st.error(f"FFmpeg执行错误 (代码 {result.returncode}): {result.stderr}")
+            st.error(f"FFmpeg执行错误 (代码 {result.returncode}):")
+            st.code(result.stderr, language="text")
             return None
             
         # 验证输出文件是否存在
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            st.error(f"视频文件生成失败，FFmpeg输出: {result.stderr}")
+        if not os.path.exists(output_path):
+            st.error(f"视频文件未生成，FFmpeg输出: {result.stderr}")
             return None
             
+        if os.path.getsize(output_path) < 1024:  # 小于1KB视为失败
+            st.error(f"生成的视频文件过小（{os.path.getsize(output_path)}字节），可能损坏")
+            return None
+            
+        st.success(f"视频生成成功，文件大小: {os.path.getsize(output_path)/1024/1024:.2f}MB")
         return output_path
+    except subprocess.TimeoutExpired:
+        st.error("FFmpeg执行超时")
+        return None
     except subprocess.CalledProcessError as e:
         st.error(f"FFmpeg执行错误: {e.stderr}")
         return None
@@ -544,7 +608,7 @@ def main_generate_process(data, settings):
         audio_path = os.path.join(temp_dir, "audio.mp3")
         
         if EDGE_TTS_AVAILABLE and settings.get('use_audio', True):
-            full_text = "\n".join([str(row['英语']) for _, row in data.iterrows()])
+            full_text = "\n".join([str(row['英语']).strip() for _, row in data.iterrows() if str(row['英语']).strip()])
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             success = loop.run_until_complete(generate_audio(
@@ -557,44 +621,60 @@ def main_generate_process(data, settings):
             
             if not success:
                 st.warning("音频生成失败，将生成无声视频")
-                # 创建一个空音频文件避免FFmpeg错误
-                with open(audio_path, 'w') as f:
-                    f.write('')
         else:
-            # 创建一个空音频文件
-            with open(audio_path, 'w') as f:
-                f.write('')
+            # 创建一个1秒的静音音频
+            import wave
+            import struct
+            with wave.open(audio_path, 'w') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(16000)
+                wav_file.writeframes(struct.pack('h', 0) * 16000)
         progress_bar.progress(30)
         
         # 3. 生成帧图片
         status_text.text("正在生成帧图片...")
-        for i, (_, row) in enumerate(data.iterrows()):
-            frame = create_frame(
-                english=str(row.get('英语', '')),
-                chinese=str(row.get('中文', '')),
-                phonetic=str(row.get('音标', '')),
-                width=settings.get('width', 1920),
-                height=settings.get('height', 1080),
-                bg_color=settings.get('bg_color', (0,0,0)),
-                bg_image=st.session_state.bg_image,
-                eng_color=settings.get('eng_color', (255,255,255)),
-                chn_color=settings.get('chn_color', (173,216,230)),
-                pho_color=settings.get('pho_color', (255,255,0)),
-                eng_size=settings.get('eng_size', 80),
-                chn_size=settings.get('chn_size', 60),
-                pho_size=settings.get('pho_size', 50),
-                text_bg_enabled=settings.get('text_bg_enabled', False),
-                text_bg_color=settings.get('text_bg_color', (255,255,255,180)),
-                text_bg_padding=settings.get('text_bg_padding', 20),
-                text_bg_radius=settings.get('text_bg_radius', 30),
-                bold_text=settings.get('bold_text', True)
-            )
-            frame_path = os.path.join(frames_dir, f"{i+1:04d}.png")
-            frame.save(frame_path)
+        valid_rows = data[(data['英语'].notna()) & (data['英语'].str.strip() != '')]
+        if valid_rows.empty:
+            st.error("没有有效的英语文本数据，无法生成视频")
+            return None
             
-            # 更新进度
-            frame_progress = 30 + int(30 * (i + 1) / len(data))
-            progress_bar.progress(min(frame_progress, 60))
+        for i, (_, row) in enumerate(valid_rows.iterrows()):
+            try:
+                frame = create_frame(
+                    english=str(row.get('英语', '')),
+                    chinese=str(row.get('中文', '')),
+                    phonetic=str(row.get('音标', '')),
+                    width=settings.get('width', 1920),
+                    height=settings.get('height', 1080),
+                    bg_color=settings.get('bg_color', (0,0,0)),
+                    bg_image=st.session_state.bg_image,
+                    eng_color=settings.get('eng_color', (255,255,255)),
+                    chn_color=settings.get('chn_color', (173,216,230)),
+                    pho_color=settings.get('pho_color', (255,255,0)),
+                    eng_size=settings.get('eng_size', 80),
+                    chn_size=settings.get('chn_size', 60),
+                    pho_size=settings.get('pho_size', 50),
+                    text_bg_enabled=settings.get('text_bg_enabled', False),
+                    text_bg_color=settings.get('text_bg_color', (255,255,255,180)),
+                    text_bg_padding=settings.get('text_bg_padding', 20),
+                    text_bg_radius=settings.get('text_bg_radius', 30),
+                    bold_text=settings.get('bold_text', True)
+                )
+                frame_path = os.path.join(frames_dir, f"{i+1:04d}.png")
+                frame.save(frame_path, quality=95)
+                
+                # 验证帧文件是否保存成功
+                if not os.path.exists(frame_path) or os.path.getsize(frame_path) == 0:
+                    st.error(f"帧图片保存失败: {frame_path}")
+                    return None
+                
+                # 更新进度
+                frame_progress = 30 + int(30 * (i + 1) / len(valid_rows))
+                progress_bar.progress(min(frame_progress, 60))
+            except Exception as e:
+                st.error(f"生成第{i+1}帧时出错: {str(e)}")
+                return None
         
         progress_bar.progress(60)
         
@@ -621,11 +701,17 @@ def main_generate_process(data, settings):
     except Exception as e:
         status_text.text(f"发生错误: {str(e)}")
         st.error(traceback.format_exc())
+        cleanup_temp_files()
         return None
 
 # 页面内容
 def main():
     st.markdown('<h1 class="main-header">旅行英语视频生成器</h1>', unsafe_allow_html=True)
+    
+    # 检查FFmpeg
+    ffmpeg_available = check_ffmpeg() is not None
+    if not ffmpeg_available:
+        st.warning("⚠️ FFmpeg未正确配置，视频生成功能可能无法使用")
     
     # 侧边栏设置
     with st.sidebar:
@@ -643,12 +729,21 @@ def main():
         if bg_option == "纯色":
             bg_color_hex = st.color_picker("选择背景颜色", "#000000")
             # 转换为RGB
-            bg_color = tuple(int(bg_color_hex[i:i+2], 16) for i in (1, 3, 5))
+            try:
+                bg_color = tuple(int(bg_color_hex[i:i+2], 16) for i in (1, 3, 5))
+            except:
+                bg_color = (0, 0, 0)
+                st.warning("颜色格式错误，使用默认黑色")
             st.session_state.bg_image = None
         else:
             bg_image = st.file_uploader("上传背景图片", type=["jpg", "jpeg", "png"])
             if bg_image:
-                st.session_state.bg_image = Image.open(bg_image)
+                try:
+                    st.session_state.bg_image = Image.open(bg_image)
+                    st.image(st.session_state.bg_image, caption="背景预览", use_column_width=True)
+                except Exception as e:
+                    st.error(f"图片加载失败: {str(e)}")
+                    st.session_state.bg_image = None
         
         # 文本设置
         st.markdown('<h4 class="section-header">文本设置</h4>', unsafe_allow_html=True)
@@ -657,13 +752,22 @@ def main():
         chn_size = st.slider("中文字体大小", 20, 100, 60)
         
         eng_color_hex = st.color_picker("英语颜色", "#FFFFFF")
-        eng_color = tuple(int(eng_color_hex[i:i+2], 16) for i in (1, 3, 5))
+        try:
+            eng_color = tuple(int(eng_color_hex[i:i+2], 16) for i in (1, 3, 5))
+        except:
+            eng_color = (255, 255, 255)
         
         pho_color_hex = st.color_picker("音标颜色", "#FFFF00")
-        pho_color = tuple(int(pho_color_hex[i:i+2], 16) for i in (1, 3, 5))
+        try:
+            pho_color = tuple(int(pho_color_hex[i:i+2], 16) for i in (1, 3, 5))
+        except:
+            pho_color = (255, 255, 0)
         
         chn_color_hex = st.color_picker("中文颜色", "#ADD8E6")
-        chn_color = tuple(int(chn_color_hex[i:i+2], 16) for i in (1, 3, 5))
+        try:
+            chn_color = tuple(int(chn_color_hex[i:i+2], 16) for i in (1, 3, 5))
+        except:
+            chn_color = (173, 216, 230)
         
         bold_text = st.checkbox("粗体文本", value=True)
         
@@ -673,7 +777,10 @@ def main():
         if text_bg_enabled:
             text_bg_color_hex = st.color_picker("文本背景颜色", "#FFFFFF")
             text_bg_alpha = st.slider("背景透明度", 0, 255, 180)
-            text_bg_color = tuple(int(text_bg_color_hex[i:i+2], 16) for i in (1, 3, 5)) + (text_bg_alpha,)
+            try:
+                text_bg_color = tuple(int(text_bg_color_hex[i:i+2], 16) for i in (1, 3, 5)) + (text_bg_alpha,)
+            except:
+                text_bg_color = (255, 255, 255, 180)
             text_bg_padding = st.slider("背景内边距", 5, 50, 20)
             text_bg_radius = st.slider("背景圆角", 0, 50, 30)
         else:
@@ -731,6 +838,10 @@ def main():
                 if '音标' not in df.columns:
                     df['音标'] = ''
                 
+                # 清理空行
+                df = df.dropna(subset=['英语'])
+                df = df[df['英语'].str.strip() != '']
+                
                 st.markdown('<h3 class="section-header">数据预览</h3>', unsafe_allow_html=True)
                 st.dataframe(df)
                 
@@ -762,6 +873,10 @@ def main():
                 
                 # 生成视频
                 if generate_btn:
+                    if not ffmpeg_available:
+                        st.error("FFmpeg未正确配置，无法生成视频")
+                        continue
+                    
                     settings = {
                         'width': width,
                         'height': height,
@@ -797,9 +912,14 @@ def main():
                             file_name="travel_english_video.mp4",
                             mime="video/mp4"
                         )
+                        
+                        # 视频预览
+                        st.markdown('<h3 class="section-header">视频预览</h3>', unsafe_allow_html=True)
+                        st.video(video_path)
         except Exception as e:
             st.error(f"处理文件时出错: {str(e)}")
             st.error(traceback.format_exc())
+            cleanup_temp_files()
     else:
         st.markdown('<div class="info-card">请在左侧上传包含"英语"和"中文"列的Excel文件开始生成视频</div>', unsafe_allow_html=True)
         st.markdown("""
@@ -814,7 +934,8 @@ def main():
         3. 点击"生成视频"按钮开始生成
         
         4. 生成完成后可下载视频文件
-        """)
-
-if __name__ == "__main__":
-    main()
+        
+        ### 依赖安装
+        如果运行出错，请先安装依赖：
+        ```bash
+        pip install streamlit pandas pillow imageio edge-tts openpyxl
