@@ -7,11 +7,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 import imageio.v2 as imageio
 import tempfile
 import subprocess
-from pydub import AudioSegment
 import traceback
 import asyncio
 import base64
-import pkg_resources
 
 # 检查 ffmpeg 是否可用（静默模式）
 def check_ffmpeg():
@@ -501,40 +499,100 @@ def preview_voice(voice_name, text, speed=1.0):
         return None
 
 # -----------------------
-# 音频合并 / 视频合并
+# 音频合并 / 视频合并 (使用 FFmpeg 替代 pydub)
 # -----------------------
+def create_silent_audio(duration, output_path):
+    """创建静音音频文件"""
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo",
+        "-t", str(duration), "-q:a", "9", "-acodec", "libmp3lame", output_path
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return True
+    except Exception as e:
+        st.warning(f"创建静音音频失败: {e}")
+        return False
+
+def adjust_audio_duration(input_path, target_duration, output_path):
+    """调整音频到指定时长"""
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-t", str(target_duration),
+        "-af", "apad", "-acodec", "libmp3lame", output_path
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return True
+    except Exception as e:
+        st.warning(f"调整音频时长失败: {e}")
+        return False
+
 def merge_audio_files(audio_paths, target_duration, pause_duration):
-    combined = AudioSegment.empty()
-    for i, p in enumerate(audio_paths):
-        if not p:
-            combined += AudioSegment.silent(duration=int(target_duration*1000))
-            if i < len(audio_paths) - 1:
-                combined += AudioSegment.silent(duration=int(pause_duration*1000))
-            continue
+    """使用 FFmpeg 合并音频文件"""
+    if not check_ffmpeg():
+        st.error("未检测到 ffmpeg，无法合并音频。")
+        return None
+    
+    # 创建临时目录
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 创建文件列表
+        list_file = os.path.join(tmpdir, "audio_list.txt")
+        output_path = os.path.join(tmpdir, "combined.mp3")
+        
+        with open(list_file, 'w') as f:
+            for i, audio_path in enumerate(audio_paths):
+                if audio_path and os.path.exists(audio_path):
+                    # 调整音频时长
+                    adjusted_audio = os.path.join(tmpdir, f"adjusted_{i}.mp3")
+                    if adjust_audio_duration(audio_path, target_duration, adjusted_audio):
+                        f.write(f"file '{adjusted_audio}'\n")
+                        
+                        # 如果不是最后一个音频，添加停顿
+                        if i < len(audio_paths) - 1:
+                            pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
+                            if create_silent_audio(pause_duration, pause_audio):
+                                f.write(f"file '{pause_audio}'\n")
+                    else:
+                        # 如果调整失败，使用静音替代
+                        silent_audio = os.path.join(tmpdir, f"silent_{i}.mp3")
+                        if create_silent_audio(target_duration, silent_audio):
+                            f.write(f"file '{silent_audio}'\n")
+                            
+                            if i < len(audio_paths) - 1:
+                                pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
+                                if create_silent_audio(pause_duration, pause_audio):
+                                    f.write(f"file '{pause_audio}'\n")
+                else:
+                    # 如果音频不存在，使用静音替代
+                    silent_audio = os.path.join(tmpdir, f"silent_{i}.mp3")
+                    if create_silent_audio(target_duration, silent_audio):
+                        f.write(f"file '{silent_audio}'\n")
+                        
+                        if i < len(audio_paths) - 1:
+                            pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
+                            if create_silent_audio(pause_duration, pause_audio):
+                                f.write(f"file '{pause_audio}'\n")
+        
+        # 使用 concat 协议合并音频
+        cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", list_file, "-c", "copy", output_path
+        ]
+        
         try:
-            audio = AudioSegment.from_file(p)
-            if len(audio) > target_duration*1000:
-                audio = audio[:int(target_duration*1000)]
-            else:
-                audio = audio + AudioSegment.silent(duration=int(target_duration*1000) - len(audio))
-            combined += audio
-            
-            if i < len(audio_paths) - 1:
-                combined += AudioSegment.silent(duration=int(pause_duration*1000))
-            
-            try:
-                os.remove(p)
-            except:
-                pass
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            return output_path
         except Exception as e:
-            combined += AudioSegment.silent(duration=int(target_duration*1000))
-            if i < len(audio_paths) - 1:
-                combined += AudioSegment.silent(duration=int(pause_duration*1000))
-    return combined
+            st.error(f"音频合并失败: {e}")
+            return None
 
 def merge_video_audio(video_path, audio_path, output_path):
+    """合并视频和音频"""
     if not check_ffmpeg():
+        st.error("未检测到 ffmpeg，无法合并音频。")
         return None
+        
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
@@ -542,14 +600,18 @@ def merge_video_audio(video_path, audio_path, output_path):
         "-c:v", "copy",
         "-c:a", "aac",
         "-strict", "experimental",
+        "-shortest",  # 确保视频长度与音频一致
         output_path
     ]
+    
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if res.returncode != 0:
+            st.error(f"ffmpeg 合并失败: {res.stderr}")
             return None
         return output_path
     except Exception as e:
+        st.error(f"调用 ffmpeg 失败: {e}")
         return None
 
 # -----------------------
@@ -650,22 +712,26 @@ def generate_video_with_optimization(df, settings, progress_bar):
                 if writer is not None:
                     writer.close()
             
+            # 合并音频
             if any(p for p in audio_paths if p is not None) and check_ffmpeg():
-                combined = merge_audio_files(audio_paths, per_duration, pause_duration)
-                combined.export(audio_out, format="mp3")
-                
-                merged = merge_video_audio(video_no_audio, audio_out, final_video)
-                if merged:
-                    final_video = merged
+                combined_audio_path = merge_audio_files(audio_paths, per_duration, pause_duration)
+                if combined_audio_path and os.path.exists(combined_audio_path):
+                    # 合并视频和音频
+                    merged = merge_video_audio(video_no_audio, combined_audio_path, final_video)
+                    if merged:
+                        final_video = merged
             
             if os.path.exists(final_video):
                 with open(final_video, "rb") as f:
                     video_bytes = f.read()
                 return video_bytes
             else:
+                st.error("生成的视频文件不存在")
                 return None
                 
     except Exception as e:
+        st.error(f"生成失败: {e}")
+        st.text(traceback.format_exc())
         return None
 
 # -----------------------
@@ -763,14 +829,10 @@ if df is not None:
             col_spacing1, col_spacing2, col_spacing3 = st.columns(3)
             with col_spacing1:
                 eng_pho_spacing = st.slider("英语-音标间距", 10, 100, 30, key="eng_pho_spacing")
-                st.info(f"当前: {eng_pho_spacing}px")
             with col_spacing2:
-                pho_chn_spacing = st.slider("音标-中文间距", 10, 100, 30, key="pho_chn_spacing")
-                st.info(f"当前: {pho_chn_spacing}px")
+                pho_chn_spacing = st.slider("音标-中文间距", 10, 100, 50, key="pho_chn_spacing")
             with col_spacing3:
                 line_spacing = st.slider("行内间距", 5, 50, 15, key="line_spacing")
-                st.info(f"当前: {line_spacing}px")
-            
             st.markdown('</div>', unsafe_allow_html=True)
 
     with tab2:
@@ -849,7 +911,7 @@ if df is not None:
         if text_bg_enabled:
             col_bg_size1, col_bg_size2 = st.columns(2)
             with col_bg_size1:
-                text_bg_width = st.slider("文字背景宽度", 400, 1600, 1000)
+                text_bg_width = st.slider("文字背景宽度", 520, 1600, 1000)
             with col_bg_size2:
                 text_bg_height = st.slider("文字背景高度", 200, 800, 400)
                 
@@ -1022,6 +1084,31 @@ with st.sidebar:
         - **字体**: 自动适配最佳字体
         - **间距**: 可调节文字间距离
         """)
+    
+    with st.expander("⚙️ 系统要求"):
+        st.markdown("""
+        - **网络**: 需要联网使用 TTS 服务
+        - **浏览器**: 建议使用 Chrome/Firefox
+        - **数据量**: 建议每次不超过50行
+        - **处理时间**: 根据数据量可能需要几分钟
+        """)
+
+    # 系统状态显示
+    st.markdown("---")
+    st.markdown("## 🔧 系统状态")
+    
+    # 检查 ffmpeg 状态
+    ffmpeg_status = check_ffmpeg()
+    if ffmpeg_status:
+        st.success("✅ FFmpeg 可用")
+    else:
+        st.error("❌ FFmpeg 未找到")
+    
+    # 检查 edge-tts 状态
+    if EDGE_TTS_AVAILABLE:
+        st.success("✅ Edge-TTS 可用")
+    else:
+        st.warning("⚠️ Edge-TTS 不可用")
 
 # 页脚
 st.markdown("---")
@@ -1031,3 +1118,13 @@ st.markdown(
     "</div>", 
     unsafe_allow_html=True
 )
+
+# 隐藏 Streamlit 默认菜单和页脚
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.stDeployButton {display:none;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
