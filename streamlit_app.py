@@ -10,7 +10,8 @@ import subprocess
 import traceback
 import asyncio
 import base64
-import time  # 添加time模块用于重试机制
+import time
+import requests
 
 # 检查 ffmpeg 是否可用（静默模式）
 def check_ffmpeg():
@@ -423,7 +424,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
     return img
 
 # -----------------------
-# Edge TTS helpers
+# Edge TTS helpers - 修复版本
 # -----------------------
 VOICE_OPTIONS = {
     "English - Female (US) - Aria": "en-US-AriaNeural",
@@ -459,19 +460,52 @@ VOICE_OPTIONS = {
     "Chinese - Male (TW) - YunSong": "zh-TW-YunSongNeural"
 }
 
-async def _edge_tts_save(text: str, voice_name: str, out_path: str, rate: str = "+0%"):
-    try:
-        communicate = edge_tts.Communicate(text, voice_name, rate=rate)
-        await communicate.save(out_path)
-        return True
-    except Exception as e:
-        st.error(f"TTS生成失败: {e}")
-        return False
+# 可靠的语音列表
+RELIABLE_VOICES = [
+    "en-US-AriaNeural",  # 最可靠的英文女声
+    "en-US-GuyNeural",   # 最可靠的英文男声
+    "zh-CN-XiaoxiaoNeural",  # 最可靠的中文女声
+    "zh-CN-YunxiNeural",     # 最可靠的中文男声
+]
 
-def generate_edge_audio(text, voice, speed=1.0, out_path=None):
+async def _edge_tts_save_retry(text: str, voice_name: str, out_path: str, rate: str = "+0%", max_retries=3):
+    """带重试机制的TTS保存函数"""
+    for attempt in range(max_retries):
+        try:
+            communicate = edge_tts.Communicate(text, voice_name, rate=rate)
+            await communicate.save(out_path)
+            
+            # 检查文件是否生成成功
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:  # 至少1KB
+                return True
+            else:
+                if os.path.exists(out_path):
+                    os.unlink(out_path)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # 等待1秒后重试
+                    continue
+                return False
+                
+        except Exception as e:
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1)  # 等待1秒后重试
+                continue
+            else:
+                st.error(f"TTS生成失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                return False
+    return False
+
+def generate_edge_audio_robust(text, voice, speed=1.0, out_path=None, fallback_voices=None):
+    """更健壮的音频生成函数，带备用语音"""
     if not EDGE_TTS_AVAILABLE:
         st.warning("Edge TTS 不可用")
         return None
+    
+    if not text or len(text.strip()) == 0:
+        return None
+    
+    # 清理文本
+    text = text.strip()
     
     pct = int((speed - 1.0) * 100)
     rate_str = f"{pct:+d}%"
@@ -480,19 +514,26 @@ def generate_edge_audio(text, voice, speed=1.0, out_path=None):
         fd, out_path = tempfile.mkstemp(suffix='.mp3')
         os.close(fd)
     
-    try:
-        success = asyncio.run(_edge_tts_save(text, voice, out_path, rate_str))
-        if success and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            return out_path
-        else:
-            if os.path.exists(out_path):
-                os.unlink(out_path)
-            return None
-    except Exception as e:
-        st.error(f"生成音频异常: {e}")
-        if os.path.exists(out_path):
-            os.unlink(out_path)
-        return None
+    # 准备语音列表（主语音 + 备用语音）
+    voices_to_try = [voice]
+    if fallback_voices:
+        voices_to_try.extend(fallback_voices)
+    
+    # 确保备用语音不重复
+    voices_to_try = list(dict.fromkeys(voices_to_try))
+    
+    for voice_to_try in voices_to_try:
+        try:
+            success = asyncio.run(_edge_tts_save_retry(text, voice_to_try, out_path, rate_str))
+            if success and os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
+                return out_path
+        except Exception as e:
+            continue
+    
+    # 所有尝试都失败
+    if os.path.exists(out_path):
+        os.unlink(out_path)
+    return None
 
 def preview_voice(voice_name, text, speed=1.0):
     if not EDGE_TTS_AVAILABLE:
@@ -505,7 +546,7 @@ def preview_voice(voice_name, text, speed=1.0):
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as f:
             temp_path = f.name
         
-        success = asyncio.run(_edge_tts_save(text, voice_name, temp_path, rate_str))
+        success = asyncio.run(_edge_tts_save_retry(text, voice_name, temp_path, rate_str))
         if success and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
             with open(temp_path, 'rb') as audio_file:
                 audio_bytes = audio_file.read()
@@ -521,7 +562,7 @@ def preview_voice(voice_name, text, speed=1.0):
         return None
 
 # -----------------------
-# 音频合并 / 视频合并 (使用 FFmpeg 替代 pydub)
+# 音频合并 / 视频合并
 # -----------------------
 def create_silent_audio(duration, output_path):
     """创建静音音频文件"""
@@ -662,12 +703,21 @@ def merge_video_audio(video_path, audio_path, output_path):
         return None
 
 # -----------------------
-# 优化的视频生成函数 - 修复重复进度条问题
+# 优化的视频生成函数
 # -----------------------
 def generate_all_audio_files(df, settings, progress_bar, status_placeholder):
     """先生成所有音频文件"""
     audio_paths = []
     total_audio_count = len(df) * len(settings['segment_order'])
+    
+    # 准备备用语音
+    fallback_voices = {
+        "english": ["en-US-AriaNeural", "en-US-GuyNeural"],
+        "chinese": ["zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural"]
+    }
+    
+    successful_count = 0
+    failed_count = 0
     
     for i, row in df.iterrows():
         eng = str(row['英语'])
@@ -681,28 +731,34 @@ def generate_all_audio_files(df, settings, progress_bar, status_placeholder):
             current_count = i * len(settings['segment_order']) + j + 1
             status_placeholder.info(f"🎵 正在生成音频 ({current_count}/{total_audio_count}): {text_to_speak[:20]}...")
             
-            # 添加重试机制
-            max_retries = 3
-            audio_file = None
+            # 获取对应的备用语音
+            lang_fallback = fallback_voices.get(text_type, [])
             
-            for retry in range(max_retries):
-                audio_file = generate_edge_audio(text_to_speak, voice, speed=settings['tts_speed'])
-                if audio_file:
-                    break
-                else:
-                    if retry < max_retries - 1:
-                        status_placeholder.warning(f"第 {retry+1} 次生成失败，正在重试...")
-                        time.sleep(1)  # 等待1秒后重试
+            # 生成音频
+            audio_file = generate_edge_audio_robust(
+                text_to_speak, 
+                voice, 
+                speed=settings['tts_speed'],
+                fallback_voices=lang_fallback
+            )
             
             if audio_file:
                 audio_paths.append(audio_file)
+                successful_count += 1
             else:
-                st.error(f"音频生成失败: {text_to_speak}")
+                st.warning(f"音频生成失败: {text_to_speak}")
                 audio_paths.append(None)
+                failed_count += 1
             
             # 更新进度
             audio_progress = current_count / total_audio_count * 0.4
             progress_bar.progress(audio_progress)
+    
+    # 显示生成结果
+    if failed_count > 0:
+        st.warning(f"音频生成完成: {successful_count}/{total_audio_count} 成功, {failed_count} 失败")
+    else:
+        st.success(f"✅ 所有音频生成完成: {successful_count}/{total_audio_count} 成功")
     
     return audio_paths
 
@@ -836,7 +892,9 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
         return None
     
     successful_audio = sum(1 for p in audio_paths if p is not None)
-    st.info(f"✅ 音频生成完成: {successful_audio}/{len(audio_paths)} 个音频生成成功")
+    if successful_audio == 0:
+        st.error("没有成功的音频生成，无法继续")
+        return None
     
     # 第二步：使用生成的音频生成视频
     video_result = generate_video_with_audio(df, settings, audio_paths, progress_bar, status_placeholder)
@@ -890,14 +948,13 @@ if df is not None:
     st.info(f"📈 共 {len(df)} 行数据，预计生成 {len(df) * 4} 段音频")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 设置面板 - 修复空白框问题
+    # 设置面板
     st.markdown('<div class="section-header">🎨 2. 自定义设置</div>', unsafe_allow_html=True)
     
-    # 使用标签页组织设置 - 移除不必要的空白
+    # 使用标签页组织设置
     tab1, tab2, tab3, tab4 = st.tabs(["🎨 样式设置", "🔊 音频设置", "📝 文字背景", "⚙️ 视频参数"])
     
     with tab1:
-        # 使用紧凑布局
         col_bg, col_txt = st.columns([1, 2])
         
         with col_bg:
@@ -939,7 +996,6 @@ if df is not None:
             
             bold_text = st.checkbox("文字加粗", value=True, key="bold_text")
             
-            # 文字间距设置 - 紧凑布局
             st.markdown("---")
             st.subheader("📏 文字间距设置")
             col_spacing1, col_spacing2, col_spacing3 = st.columns(3)
@@ -1089,7 +1145,7 @@ if df is not None:
             st.image(preview_img, caption="帧预览", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # 生成按钮 - 修复重复进度条问题
+    # 生成按钮
     st.markdown('<div class="section-header">🚀 4. 生成视频</div>', unsafe_allow_html=True)
     
     if len(df) > 20:
