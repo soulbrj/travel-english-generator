@@ -12,6 +12,8 @@ import asyncio
 import base64
 import time
 from pathlib import Path
+import wave
+import struct
 
 # 检查 ffmpeg 是否可用（增强版）
 def check_ffmpeg():
@@ -460,8 +462,6 @@ async def generate_audio(text, voice, rate, output_path):
         if not text:
             st.warning("音频文本为空，生成静音文件")
             # 创建一个空的MP3文件（实际可播放的静音文件）
-            import wave
-            import struct
             with wave.open(output_path, 'w') as wav_file:
                 wav_file.setnchannels(1)
                 wav_file.setsampwidth(2)
@@ -499,8 +499,6 @@ def generate_video(frames_dir, audio_path, output_path, fps=1, ffmpeg_path=None)
     if os.path.getsize(audio_path) == 0:
         st.warning("音频文件为空，将生成无声视频")
         # 创建一个1秒的静音音频避免FFmpeg错误
-        import wave
-        import struct
         with wave.open(audio_path, 'w') as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
@@ -623,8 +621,6 @@ def main_generate_process(data, settings):
                 st.warning("音频生成失败，将生成无声视频")
         else:
             # 创建一个1秒的静音音频
-            import wave
-            import struct
             with wave.open(audio_path, 'w') as wav_file:
                 wav_file.setnchannels(1)
                 wav_file.setsampwidth(2)
@@ -875,69 +871,66 @@ def main():
                 if generate_btn:
                     if not ffmpeg_available:
                         st.error("FFmpeg未正确配置，无法生成视频")
-                        continue
-                    
-                    settings = {
-                        'width': width,
-                        'height': height,
-                        'bg_color': bg_color,
-                        'eng_color': eng_color,
-                        'chn_color': chn_color,
-                        'pho_color': pho_color,
-                        'eng_size': eng_size,
-                        'chn_size': chn_size,
-                        'pho_size': pho_size,
-                        'text_bg_enabled': text_bg_enabled,
-                        'text_bg_color': text_bg_color,
-                        'text_bg_padding': text_bg_padding,
-                        'text_bg_radius': text_bg_radius,
-                        'bold_text': bold_text,
-                        'use_audio': use_audio and EDGE_TTS_AVAILABLE,
-                        'voice': voice,
-                        'rate': rate_str,
-                        'fps': fps
-                    }
-                    
-                    video_path = main_generate_process(df, settings)
-                    
-                    if video_path and os.path.exists(video_path):
-                        st.markdown('<div class="success-card">视频生成成功！</div>', unsafe_allow_html=True)
+                    else:
+                        settings = {
+                            'width': width,
+                            'height': height,
+                            'bg_color': bg_color,
+                            'eng_color': eng_color,
+                            'chn_color': chn_color,
+                            'pho_color': pho_color,
+                            'eng_size': eng_size,
+                            'chn_size': chn_size,
+                            'pho_size': pho_size,
+                            'text_bg_enabled': text_bg_enabled,
+                            'text_bg_color': text_bg_color,
+                            'text_bg_padding': text_bg_padding,
+                            'text_bg_radius': text_bg_radius,
+                            'bold_text': bold_text,
+                            'use_audio': use_audio and EDGE_TTS_AVAILABLE,
+                            'voice': voice,
+                            'rate': rate_str,
+                            'fps': fps
+                        }
                         
-                        # 提供下载
-                        with open(video_path, "rb") as f:
-                            video_bytes = f.read()
-                        st.download_button(
-                            label="下载视频",
-                            data=video_bytes,
-                            file_name="travel_english_video.mp4",
-                            mime="video/mp4"
-                        )
+                        video_path = main_generate_process(df, settings)
                         
-                        # 视频预览
-                        st.markdown('<h3 class="section-header">视频预览</h3>', unsafe_allow_html=True)
-                        st.video(video_path)
+                        if video_path and os.path.exists(video_path):
+                            st.markdown('<div class="success-card">视频生成成功！</div>', unsafe_allow_html=True)
+                            
+                            # 提供下载
+                            with open(video_path, "rb") as f:
+                                video_bytes = f.read()
+                            st.download_button(
+                                label="下载视频",
+                                data=video_bytes,
+                                file_name="travel_english_video.mp4",
+                                mime="video/mp4"
+                            )
+                            
+                            # 视频预览
+                            st.markdown('<h3 class="section-header">视频预览</h3>', unsafe_allow_html=True)
+                            st.video(video_path)
         except Exception as e:
             st.error(f"处理文件时出错: {str(e)}")
             st.error(traceback.format_exc())
             cleanup_temp_files()
     else:
         st.markdown('<div class="info-card">请在左侧上传包含"英语"和"中文"列的Excel文件开始生成视频</div>', unsafe_allow_html=True)
-        # 找到对应的markdown块，确保三引号正确闭合
         st.markdown("""
         ### 使用说明
         1. 准备Excel文件，包含以下列：
-       - 英语：需要显示的英文文本
-       - 中文：对应的中文翻译
-       - 音标（可选）：英文的音标
-
+           - 英语：需要显示的英文文本
+           - 中文：对应的中文翻译
+           - 音标（可选）：英文的音标
+        
         2. 配置视频参数，包括背景、字体大小、颜色等
-
+        
         3. 点击"生成视频"按钮开始生成
-
+        
         4. 生成完成后可下载视频文件
-
+        
         ### 依赖安装
         如果运行出错，请先安装依赖：
         ```bash
         pip install streamlit pandas pillow imageio edge-tts openpyxl
-
