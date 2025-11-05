@@ -1,4 +1,4 @@
-# streamlit_app.py (完整替换文件)
+# streamlit_app.py
 import os
 import shutil
 import streamlit as st
@@ -13,6 +13,9 @@ import asyncio
 import base64
 import socket
 import time
+import threading
+import queue
+import requests
 
 # -----------------------
 # 检查 ffmpeg 是否可用（静默模式）
@@ -21,7 +24,7 @@ def check_ffmpeg():
     ffmpeg_path = shutil.which('ffmpeg')
     return ffmpeg_path
 
-# edge-tts 用于多音色 TTS
+# edge-tts 用于多音色 TTS（优先）
 try:
     import edge_tts
     EDGE_TTS_AVAILABLE = True
@@ -149,7 +152,7 @@ if 'generation_status' not in st.session_state:
     st.session_state.generation_status = None
 
 # -----------------------
-# 工具函数
+# 字体、布局、绘图相关函数（保留原有逻辑）
 # -----------------------
 def wrap_text(text, max_chars):
     if not text or str(text).strip().lower() == 'nan':
@@ -427,163 +430,259 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
     return img
 
 # -----------------------
-# Edge TTS helpers (增强版)
+# Edge TTS helpers - 采用线程安全的 coroutine 运行器
 # -----------------------
-VOICE_OPTIONS = {
-    "English - Female (US) - Aria": "en-US-AriaNeural",
-    "English - Female (US) - Jenny": "en-US-JennyNeural",
-    "English - Female (US) - Sara": "en-US-SaraNeural",
-    "English - Male (US) - Davis": "en-US-DavisNeural",
-    "English - Male (US) - Guy": "en-US-GuyNeural",
-    "English - Male (US) - Tony": "en-US-TonyNeural",
-    "English - Male (US) - Brian": "en-US-BrianNeural",
-    "English - Male (US) - Eric": "en-US-EricNeural",
-    "English - Female (UK) - Libby": "en-GB-LibbyNeural",
-    "English - Female (UK) - Sonia": "en-GB-SoniaNeural",
-    "English - Male (UK) - Ryan": "en-GB-RyanNeural",
-    "English - Male (UK) - Alfie": "en-GB-AlfieNeural",
-    "English - Male (UK) - George": "en-GB-GeorgeNeural",
-    "English - Female (AU) - Natasha": "en-AU-NatashaNeural",
-    "English - Male (AU) - William": "en-AU-WilliamNeural",
-    "Chinese - Female (CN) - Xiaoxiao": "zh-CN-XiaoxiaoNeural",
-    "Chinese - Female (CN) - Xiaoyi": "zh-CN-XiaoyiNeural",
-    "Chinese - Female (CN) - Xiaochen": "zh-CN-XiaochenNeural",
-    "Chinese - Female (CN) - Xiaohan": "zh-CN-XiaohanNeural",
-    "Chinese - Male (CN) - Yunfeng": "zh-CN-YunfengNeural",
-    "Chinese - Male (CN) - Yunyang": "zh-CN-YunyangNeural",
-    "Chinese - Male (CN) - Yunjian": "zh-CN-YunjianNeural",
-    "Chinese - Male (CN) - Yunze": "zh-CN-YunzeNeural",
-    "Chinese - Male (CN) - Yunkai": "zh-CN-YunkaiNeural",
-    "Chinese - Male (CN) - Yunxi": "zh-CN-YunxiNeural",
-    "Chinese - Male (CN) - Yunhao": "zh-CN-YunhaoNeural",
-    "Chinese - Male (CN) - Yunlong": "zh-CN-YunlongNeural",
-    "Chinese - Female (TW) - HsiaoChen": "zh-TW-HsiaoChenNeural",
-    "Chinese - Female (TW) - HsiaoYu": "zh-TW-HsiaoYuNeural",
-    "Chinese - Male (TW) - YunJhe": "zh-TW-YunJheNeural",
-    "Chinese - Male (TW) - YunSong": "zh-TW-YunSongNeural"
-}
-
-def is_service_reachable(host="speech.platform.bing.com", port=443, timeout=3):
-    """检查微软语音服务是否可达"""
+def is_edge_tts_reachable(host='speech.platform.bing.com', port=443, timeout=3):
     try:
         socket.create_connection((host, port), timeout=timeout)
         return True
-    except OSError:
+    except Exception:
         return False
 
-async def _edge_tts_save(text: str, voice_name: str, out_path: str, rate: str = "+0%"):
+def run_coro_in_new_loop(coro, timeout=None):
+    """
+    在单独线程中创建一个新事件循环来运行协程，解决 streamlit 已有事件循环导致 asyncio.run 失败的问题。
+    返回协程的返回值，若异常则抛出异常。
+    """
+    q = queue.Queue()
+
+    def _runner():
+        try:
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            res = new_loop.run_until_complete(coro)
+            q.put(("ok", res))
+        except Exception as e:
+            q.put(("err", e))
+        finally:
+            try:
+                new_loop.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout)
     try:
-        communicate = edge_tts.Communicate(text, voice_name, rate=rate)
-        await communicate.save(out_path)
-        return True
-    except Exception as e:
-        # 不抛出到上层，直接返回 False
-        return False
+        status, payload = q.get_nowait()
+    except queue.Empty:
+        raise TimeoutError("TTS 线程执行超时")
+    if status == "ok":
+        return payload
+    else:
+        raise payload
 
-def generate_edge_audio(text, voice, speed=1.0, out_path=None, retry=2):
-    """生成单段音频，带重试和网络判断"""
-    if not EDGE_TTS_AVAILABLE:
-        return None
+# 异步保存 (edge-tts)
+async def _edge_tts_save_async(text: str, voice_name: str, out_path: str, rate: str = "+0%"):
+    communicate = edge_tts.Communicate(text, voice_name, rate=rate)
+    await communicate.save(out_path)
+    return True
 
-    if not is_service_reachable():
-        # 无法连通微软服务，直接返回 None（上层会使用静音）
-        return None
+def _edge_tts_save_sync_via_thread(text: str, voice_name: str, out_path: str, rate: str = "+0%"):
+    coro = _edge_tts_save_async(text, voice_name, out_path, rate)
+    return run_coro_in_new_loop(coro, timeout=60)
 
-    pct = int((speed - 1.0) * 100)
-    rate_str = f"{pct:+d}%"
-
+# ------------- 备用方法：直接 HTTP POST 到微软 Web TTS 合成接口（尝试） -------------
+def web_tts_via_http_ssml(text, voice, rate_percent=0, out_path=None, timeout=30):
+    """
+    尝试使用 HTTP POST 将 SSML 发送到 speech.platform.bing.com 的合成端点。
+    这个端点在某些环境下可用，作为 edge-tts 失败时的降级方案。
+    注意：该接口并非官方对外稳定 API；在部分环境仍然可能被防火墙或限制阻断。
+    """
     if out_path is None:
         fd, out_path = tempfile.mkstemp(suffix='.mp3')
         os.close(fd)
 
-    for attempt in range(1, retry+1):
-        try:
-            # 兼容 Streamlit 运行环境的异步调用
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
+    ssml = f"""
+    <speak version='1.0' xml:lang='en-US'>
+        <voice xml:lang='en-US' name='{voice}'>
+            <prosody rate='{rate_percent}%'>{escape_ssml_text(text)}</prosody>
+        </voice>
+    </speak>
+    """
 
-            if loop and loop.is_running():
-                # 如果存在正在运行的 loop，则通过 create_task + wait 方式执行
-                task = asyncio.ensure_future(_edge_tts_save(text, voice, out_path, rate_str))
-                # 等待任务完成（在同一事件循环内）
-                loop.run_until_complete(task)
-                success = task.result()
-            else:
-                success = asyncio.run(_edge_tts_save(text, voice, out_path, rate_str))
+    # 常见浏览器头，尝试模拟浏览器行为
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
+        "Origin": "https://edge.microsoft.com",
+        "Referer": "https://edge.microsoft.com/",
+    }
 
-            if success and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+    url = "https://speech.platform.bing.com/consumer/speech/synthesize"
+    try:
+        resp = requests.post(url, data=ssml.encode('utf-8'), headers=headers, timeout=timeout, stream=True)
+        if resp.status_code == 200:
+            # 写入文件流
+            with open(out_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=4096):
+                    if chunk:
+                        f.write(chunk)
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                 return out_path
             else:
-                # 清理并重试
+                try:
+                    os.unlink(out_path)
+                except:
+                    pass
+                return None
+        else:
+            # 非 200 状态
+            try:
+                os.unlink(out_path)
+            except:
+                pass
+            return None
+    except Exception as e:
+        try:
+            if os.path.exists(out_path):
+                os.unlink(out_path)
+        except:
+            pass
+        return None
+
+def escape_ssml_text(text):
+    # 最小化的 SSML 转义
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+# -----------------------
+# 生成音频的主方法（集成优先策略 + 降级策略 + 重试）
+# -----------------------
+def generate_edge_audio(text, voice, speed=1.0, out_path=None, retry=2):
+    """
+    1) 优先使用 edge-tts 库（线程+事件循环）
+    2) 若失败，尝试使用 web_tts_via_http_ssml 作为降级（HTTP POST SSML）
+    3) 若仍失败，返回 None（调用方会使用静音占位）
+    """
+    # 安全检查
+    if out_path is None:
+        fd, out_path = tempfile.mkstemp(suffix='.mp3')
+        os.close(fd)
+
+    # 先尝试 edge-tts
+    if EDGE_TTS_AVAILABLE:
+        pct = int((speed - 1.0) * 100)
+        rate_str = f"{pct:+d}%"
+        last_exc = None
+        for attempt in range(1, retry+1):
+            try:
+                # run edge-tts in separate loop/thread
+                _edge_tts_save_sync_via_thread(text, voice, out_path, rate_str)
+                # check file
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                    return out_path
+                else:
+                    last_exc = RuntimeError("edge-tts did not create a file")
+                    if os.path.exists(out_path):
+                        try:
+                            os.unlink(out_path)
+                        except:
+                            pass
+                    time.sleep(1)
+            except Exception as e:
+                last_exc = e
                 if os.path.exists(out_path):
                     try:
                         os.unlink(out_path)
                     except:
                         pass
-                time.sleep(0.6)
-        except Exception:
-            # 尝试下一轮重试
+                # small wait then retry
+                time.sleep(1)
+
+        # 如果 edge-tts 尝试失败，继续尝试 HTTP 降级
+        st.warning(f"TTS: edge-tts 多次尝试失败，准备尝试 HTTP 降级接口。错误示例：{last_exc}")
+
+    else:
+        st.info("edge-tts 未安装或不可用，直接尝试 HTTP 降级接口（若可达）")
+
+    # HTTP 降级：尝试 web_tts_via_http_ssml
+    # rate percent for SSML prosody (web_tts_via_http_ssml expects percent like +10 or -10 but we pass int)
+    pct2 = int((speed - 1.0) * 100)
+    for attempt in range(1, retry+1):
+        try:
+            res = web_tts_via_http_ssml(text, voice, rate_percent=pct2, out_path=out_path, timeout=30)
+            if res and os.path.exists(res) and os.path.getsize(res) > 0:
+                return res
+            else:
+                if os.path.exists(out_path):
+                    try:
+                        os.unlink(out_path)
+                    except:
+                        pass
+                time.sleep(1)
+        except Exception as e:
             if os.path.exists(out_path):
                 try:
                     os.unlink(out_path)
                 except:
                     pass
-            time.sleep(0.6)
-            continue
+            time.sleep(1)
 
-    # 重试结束仍失败
-    if os.path.exists(out_path):
-        try:
-            os.unlink(out_path)
-        except:
-            pass
+    # 全部失败，返回 None（上层使用静音）
+    st.error("TTS 多次生成失败，已使用静音占位。")
     return None
 
 def preview_voice(voice_name, text, speed=1.0):
-    """生成试听音频并返回 bytes"""
-    if not EDGE_TTS_AVAILABLE:
-        return None
+    """
+    试听：优先使用 edge-tts -> 降级 HTTP
+    返回 bytes 或 None
+    """
+    # 临时文件
+    tempf = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+    temp_path = tempf.name
+    tempf.close()
 
-    if not is_service_reachable():
-        return None
-
-    pct = int((speed - 1.0) * 100)
-    rate_str = f"{pct:+d}%"
-
-    async def _preview():
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-        tmp.close()
-        communicate = edge_tts.Communicate(text, voice_name, rate=rate_str)
-        await communicate.save(tmp.name)
-        if os.path.exists(tmp.name) and os.path.getsize(tmp.name) > 0:
-            with open(tmp.name, 'rb') as f:
-                content = f.read()
-            os.unlink(tmp.name)
-            return content
-        else:
-            if os.path.exists(tmp.name):
-                os.unlink(tmp.name)
-            return None
-
-    try:
+    # 优先 edge-tts
+    if EDGE_TTS_AVAILABLE:
+        pct = int((speed - 1.0) * 100)
+        rate_str = f"{pct:+d}%"
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+            run_coro_in_new_loop(_edge_tts_save_async(text, voice_name, temp_path, rate_str), timeout=30)
+            if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                with open(temp_path, 'rb') as f:
+                    data = f.read()
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                return data
+        except Exception as e:
+            # fallback to http
+            if os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
 
-        if loop and loop.is_running():
-            task = asyncio.ensure_future(_preview())
-            loop.run_until_complete(task)
-            return task.result()
+    # HTTP 降级尝试
+    try:
+        res = web_tts_via_http_ssml(text, voice_name, rate_percent=int((speed - 1.0) * 100), out_path=temp_path, timeout=30)
+        if res and os.path.exists(res) and os.path.getsize(res) > 0:
+            with open(res, 'rb') as f:
+                data = f.read()
+            try:
+                os.unlink(res)
+            except:
+                pass
+            return data
         else:
-            return asyncio.run(_preview())
-    except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+            return None
+    except Exception as e:
+        if os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
         return None
 
 # -----------------------
-# 音频合并 / 视频合并 (使用 FFmpeg 替代 pydub)
+# 音频合并 / 视频合并 (使用 FFmpeg)
 # -----------------------
 def create_silent_audio(duration, output_path):
     """创建静音音频文件"""
@@ -594,7 +693,8 @@ def create_silent_audio(duration, output_path):
     try:
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         return os.path.exists(output_path) and os.path.getsize(output_path) > 0
-    except Exception:
+    except Exception as e:
+        st.warning(f"创建静音音频失败: {e}")
         return False
 
 def adjust_audio_duration(input_path, target_duration, output_path):
@@ -610,7 +710,8 @@ def adjust_audio_duration(input_path, target_duration, output_path):
     try:
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         return os.path.exists(output_path) and os.path.getsize(output_path) > 0
-    except Exception:
+    except Exception as e:
+        st.warning(f"调整音频时长失败: {e}")
         return create_silent_audio(target_duration, output_path)
 
 def merge_audio_files(audio_paths, target_duration, pause_duration):
@@ -619,7 +720,9 @@ def merge_audio_files(audio_paths, target_duration, pause_duration):
         st.error("未检测到 ffmpeg，无法合并音频。")
         return None
     
+    # 创建临时目录
     with tempfile.TemporaryDirectory() as tmpdir:
+        # 创建文件列表
         list_file = os.path.join(tmpdir, "audio_list.txt")
         output_path = os.path.join(tmpdir, "combined.mp3")
         
@@ -627,25 +730,32 @@ def merge_audio_files(audio_paths, target_duration, pause_duration):
         
         for i, audio_path in enumerate(audio_paths):
             if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                # 调整音频时长
                 adjusted_audio = os.path.join(tmpdir, f"adjusted_{i}.mp3")
                 if adjust_audio_duration(audio_path, target_duration, adjusted_audio):
                     valid_files.append(adjusted_audio)
+                    
+                    # 如果不是最后一个音频，添加停顿
                     if i < len(audio_paths) - 1:
                         pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
                         if create_silent_audio(pause_duration, pause_audio):
                             valid_files.append(pause_audio)
                 else:
+                    # 如果调整失败，使用静音替代
                     silent_audio = os.path.join(tmpdir, f"silent_{i}.mp3")
                     if create_silent_audio(target_duration, silent_audio):
                         valid_files.append(silent_audio)
+                        
                         if i < len(audio_paths) - 1:
                             pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
                             if create_silent_audio(pause_duration, pause_audio):
                                 valid_files.append(pause_audio)
             else:
+                # 如果音频不存在，使用静音替代
                 silent_audio = os.path.join(tmpdir, f"silent_{i}.mp3")
                 if create_silent_audio(target_duration, silent_audio):
                     valid_files.append(silent_audio)
+                    
                     if i < len(audio_paths) - 1:
                         pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
                         if create_silent_audio(pause_duration, pause_audio):
@@ -655,10 +765,12 @@ def merge_audio_files(audio_paths, target_duration, pause_duration):
             st.error("没有有效的音频文件可合并")
             return None
             
+        # 写入文件列表
         with open(list_file, 'w') as f:
             for file_path in valid_files:
                 f.write(f"file '{file_path}'\n")
         
+        # 使用 concat 协议合并音频
         cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", list_file, "-c", "copy", output_path
@@ -695,7 +807,7 @@ def merge_video_audio(video_path, audio_path, output_path):
         "-c:v", "copy",
         "-c:a", "aac",
         "-strict", "experimental",
-        "-shortest",
+        "-shortest",  # 确保视频长度与音频一致
         output_path
     ]
     
@@ -711,7 +823,7 @@ def merge_video_audio(video_path, audio_path, output_path):
         return None
 
 # -----------------------
-# 优化的视频生成函数 - 保留原功能但增加容错
+# 优化的视频生成函数 - 修复重复进度条问题
 # -----------------------
 def generate_video_with_optimization(df, settings, progress_bar, status_placeholder):
     try:
@@ -767,21 +879,12 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                         voice, text_type = voice_mapping[segment_type]
                         text_to_speak = eng if text_type == "english" else chn
                         
-                        # 为每个片段生成音频（或静音占位）
                         audio_file = generate_edge_audio(text_to_speak, voice, speed=tts_speed)
-                        if audio_file is None:
-                            # 使用静音占位
-                            silent_path = os.path.join(tmpdir, f"silent_{i}_{j}.mp3")
-                            if create_silent_audio(per_duration, silent_path):
-                                audio_paths.append(silent_path)
-                            else:
-                                audio_paths.append(None)
-                        else:
-                            audio_paths.append(audio_file)
+                        audio_paths.append(audio_file)
                         
-                        # 更新音频生成进度（占总体 30%）
+                        # 更新音频生成进度
                         audio_progress = (i * len(segment_order) + j + 1) / (len(df) * len(segment_order)) * 0.3
-                        progress_bar.progress(min(audio_progress, 0.3))
+                        progress_bar.progress(audio_progress)
                 
                 # 生成视频帧
                 status_placeholder.info("🎬 正在生成视频...")
@@ -881,7 +984,7 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
         return None
 
 # -----------------------
-# UI 与主流程
+# UI 与主流程（保持原样）
 # -----------------------
 st.markdown('<h1 class="main-header">🎬 旅行英语视频生成器</h1>', unsafe_allow_html=True)
 st.markdown("### 多音色循环播放 • 专业级视频制作")
@@ -997,6 +1100,41 @@ if df is not None:
         st.subheader("🎙️ 音色选择与试听")
         
         col_voice1, col_voice2, col_voice3 = st.columns(3)
+        
+        # 预定义音色列表（你可以按需增减）
+        VOICE_OPTIONS = {
+            "English - Female (US) - Aria": "en-US-AriaNeural",
+            "English - Female (US) - Jenny": "en-US-JennyNeural",
+            "English - Female (US) - Sara": "en-US-SaraNeural",
+            "English - Male (US) - Davis": "en-US-DavisNeural",
+            "English - Male (US) - Guy": "en-US-GuyNeural",
+            "English - Male (US) - Tony": "en-US-TonyNeural",
+            "English - Male (US) - Brian": "en-US-BrianNeural",
+            "English - Male (US) - Eric": "en-US-EricNeural",
+            "English - Female (UK) - Libby": "en-GB-LibbyNeural",
+            "English - Female (UK) - Sonia": "en-GB-SoniaNeural",
+            "English - Male (UK) - Ryan": "en-GB-RyanNeural",
+            "English - Male (UK) - Alfie": "en-GB-AlfieNeural",
+            "English - Male (UK) - George": "en-GB-GeorgeNeural",
+            "English - Female (AU) - Natasha": "en-AU-NatashaNeural",
+            "English - Male (AU) - William": "en-AU-WilliamNeural",
+            "Chinese - Female (CN) - Xiaoxiao": "zh-CN-XiaoxiaoNeural",
+            "Chinese - Female (CN) - Xiaoyi": "zh-CN-XiaoyiNeural",
+            "Chinese - Female (CN) - Xiaochen": "zh-CN-XiaochenNeural",
+            "Chinese - Female (CN) - Xiaohan": "zh-CN-XiaohanNeural",
+            "Chinese - Male (CN) - Yunfeng": "zh-CN-YunfengNeural",
+            "Chinese - Male (CN) - Yunyang": "zh-CN-YunyangNeural",
+            "Chinese - Male (CN) - Yunjian": "zh-CN-YunjianNeural",
+            "Chinese - Male (CN) - Yunze": "zh-CN-YunzeNeural",
+            "Chinese - Male (CN) - Yunkai": "zh-CN-YunkaiNeural",
+            "Chinese - Male (CN) - Yunxi": "zh-CN-YunxiNeural",
+            "Chinese - Male (CN) - Yunhao": "zh-CN-YunhaoNeural",
+            "Chinese - Male (CN) - Yunlong": "zh-CN-YunlongNeural",
+            "Chinese - Female (TW) - HsiaoChen": "zh-TW-HsiaoChenNeural",
+            "Chinese - Female (TW) - HsiaoYu": "zh-TW-HsiaoYuNeural",
+            "Chinese - Male (TW) - YunJhe": "zh-TW-YunJheNeural",
+            "Chinese - Male (TW) - YunSong": "zh-TW-YunSongNeural"
+        }
         
         with col_voice1:
             st.markdown("**英文男声**")
@@ -1226,12 +1364,12 @@ with st.sidebar:
     
     with st.expander("⚙️ 系统要求"):
         st.markdown("""
-        - **网络**: 需要联网（edge-tts）
+        - **网络**: 需要联网（若部署平台限制外网，请使用本地生成音频或 Azure Key）
         - **浏览器**: 建议使用 Chrome/Firefox
         - **数据量**: 建议每次不超过50行
         - **处理时间**: 根据数据量可能需要几分钟
         """)
-
+    
 # 页脚
 st.markdown("---")
 st.markdown(
