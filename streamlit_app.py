@@ -376,17 +376,21 @@ def adjust_audio_duration(input_path, target_duration, out_path):
         return create_silent_audio(target_duration, out_path)
 
 def concat_files_with_ffmpeg(file_paths, out_path, is_video=False):
-    # write list file
+    """
+    安全写入 concat list 文件：避免在 f-string 中写复杂转义
+    """
     with tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt") as f:
         for p in file_paths:
-            # ffmpeg concat requires escaped single quotes if present
-            f.write(f"file '{p.replace(\"'\",\"'\\\\''\")}'\n")
+            # 先做安全替换再写入
+            # 把单引号转为 '\'' 的形式，保证 ffmpeg 读入无误
+            safe_path = p.replace("'", "'\\''")
+            f.write("file '%s'\n" % safe_path)
         list_path = f.name
     try:
         if is_video:
             cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",list_path,"-c","copy", out_path]
         else:
-            # force re-encode to mp3 (to avoid codec mismatch)
+            # 采用 concat 协议（若必要可改为 re-encode）
             cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",list_path,"-c","copy", out_path]
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         return os.path.exists(out_path) and os.path.getsize(out_path)>0
@@ -561,7 +565,8 @@ def generate_video_per_line(df, settings, uploaded_audio_map, status_placeholder
             listf = os.path.join(tmpdir, "video_list.txt")
             with open(listf,"w") as f:
                 for p in line_video_files:
-                    f.write(f"file '{p.replace(\"'\",\"'\\\\''\")}'\n")
+                    safe_path = p.replace("'", "'\\''")
+                    f.write("file '%s'\n" % safe_path)
             cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",listf,"-c:v","libx264","-c:a","aac",final_out]
             try:
                 subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
@@ -573,7 +578,10 @@ def generate_video_per_line(df, settings, uploaded_audio_map, status_placeholder
             with open(final_out,"rb") as f:
                 data = f.read()
             # optionally copy final output to current working dir for persistence
-            shutil.copy(final_out, os.path.join(os.getcwd(), "output_video.mp4"))
+            try:
+                shutil.copy(final_out, os.path.join(os.getcwd(), "output_video.mp4"))
+            except Exception:
+                pass
             progress_bar.progress(1.0)
             status_placeholder.success("生成完成：output_video.mp4")
             return data
