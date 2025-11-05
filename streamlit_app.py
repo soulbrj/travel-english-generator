@@ -10,22 +10,35 @@ import subprocess
 import traceback
 import asyncio
 import base64
+import time
 
-# 检查 ffmpeg 是否可用（静默模式）
+# 检查 ffmpeg 是否可用
 def check_ffmpeg():
     ffmpeg_path = shutil.which('ffmpeg')
-    if ffmpeg_path:
-        st.success(f"✅ FFmpeg 找到: {ffmpeg_path}")
-    else:
-        st.error("❌ 未找到 FFmpeg，请确保已安装 FFmpeg 并添加到系统 PATH")
     return ffmpeg_path
 
-# edge-tts 用于多音色 TTS
+# 尝试导入各种TTS库
+EDGE_TTS_AVAILABLE = False
+PYTTSX3_AVAILABLE = False
+GTTS_AVAILABLE = False
+
 try:
     import edge_tts
     EDGE_TTS_AVAILABLE = True
 except Exception:
     EDGE_TTS_AVAILABLE = False
+
+try:
+    import pyttsx3
+    PYTTSX3_AVAILABLE = True
+except Exception:
+    PYTTSX3_AVAILABLE = False
+
+try:
+    from gtts import gTTS
+    GTTS_AVAILABLE = True
+except Exception:
+    GTTS_AVAILABLE = False
 
 # 页面配置
 st.set_page_config(
@@ -35,7 +48,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 自定义CSS样式 - 移除不必要的空白
+# 自定义CSS样式
 st.markdown("""
 <style>
     .main-header {
@@ -124,7 +137,6 @@ st.markdown("""
         padding: 0.5rem 1rem !important;
         font-size: 0.9rem !important;
     }
-    /* 移除不必要的空白 */
     .stTabs [data-baseweb="tab-list"] {
         gap: 0px;
     }
@@ -142,10 +154,8 @@ st.markdown("""
 # 会话状态
 if 'bg_image' not in st.session_state:
     st.session_state.bg_image = None
-if 'audio_available' not in st.session_state:
-    st.session_state.audio_available = EDGE_TTS_AVAILABLE
-if 'generation_status' not in st.session_state:
-    st.session_state.generation_status = None
+if 'tts_method' not in st.session_state:
+    st.session_state.tts_method = "edge_tts"
 
 # -----------------------
 # 工具函数
@@ -178,61 +188,33 @@ def wrap_text(text, max_chars):
 def get_phonetic_font(size, bold=False):
     """专门用于音标显示的字体加载函数"""
     try:
-        # 优先尝试直接加载已知的音标字体文件
         font_files = [
-            "DoulosSIL-R.ttf",
-            "CharisSIL-R.ttf",
-            "NotoSansIPA-Regular.ttf",
-            "ArialUni.ttf",
-            "l_10646.ttf",
-            "DejaVuSans.ttf",
+            "DoulosSIL-R.ttf", "CharisSIL-R.ttf", "NotoSansIPA-Regular.ttf",
+            "ArialUni.ttf", "l_10646.ttf", "DejaVuSans.ttf",
         ]
         
-        # 尝试从系统字体目录加载
         system_font_paths = [
-            "/usr/share/fonts/",
-            "C:/Windows/Fonts/",
-            "~/Library/Fonts/",
-            "/Library/Fonts/",
+            "/usr/share/fonts/", "C:/Windows/Fonts/", 
+            "~/Library/Fonts/", "/Library/Fonts/",
         ]
         
-        # 尝试加载粗体
         if bold:
             bold_fonts = [
-                "DoulosSIL-B.ttf",
-                "CharisSIL-B.ttf",
-                "NotoSansIPA-Bold.ttf",
-                "ArialUniBold.ttf",
-                "DejaVuSans-Bold.ttf",
+                "DoulosSIL-B.ttf", "CharisSIL-B.ttf", "NotoSansIPA-Bold.ttf",
+                "ArialUniBold.ttf", "DejaVuSans-Bold.ttf",
             ]
             for font in bold_fonts:
                 try:
                     return ImageFont.truetype(font, size)
                 except:
                     pass
-                for path in system_font_paths:
-                    font_path = os.path.join(path, font)
-                    if os.path.exists(font_path):
-                        try:
-                            return ImageFont.truetype(font_path, size)
-                        except:
-                            continue
         
-        # 尝试加载常规字体
         for font in font_files:
             try:
                 return ImageFont.truetype(font, size)
             except:
                 pass
-            for path in system_font_paths:
-                font_path = os.path.join(path, font)
-                if os.path.exists(font_path):
-                    try:
-                        return ImageFont.truetype(font_path, size)
-                    except:
-                        continue
         
-        # 最后使用默认字体
         return ImageFont.load_default()
     except Exception as e:
         return ImageFont.load_default()
@@ -244,38 +226,16 @@ def get_font(size, font_type="default", bold=False):
     
     try:
         chinese_fonts = [
-            "simhei.ttf",
-            "msyh.ttc",
-            "simsun.ttc",
-            "STHeiti Light.ttc",
-            "PingFang.ttc",
-            "Arial Unicode MS",
-            "SimHei", 
-            "Microsoft YaHei",
-            "WenQuanYi Micro Hei",
-            "NotoSansCJK-Regular.ttc",
-            "FZSTK.TTF",
-            "SourceHanSansCN-Regular.otf",
+            "simhei.ttf", "msyh.ttc", "simsun.ttc", "STHeiti Light.ttc",
+            "PingFang.ttc", "Arial Unicode MS", "SimHei", "Microsoft YaHei",
+            "WenQuanYi Micro Hei", "NotoSansCJK-Regular.ttc",
         ]
         
         if bold:
             bold_fonts = [
-                "simhei.ttf",
-                "msyhbd.ttc",
-                "STHeiti Medium.ttc",
-                "PingFang SC Semibold.ttc",
-                "Arial Unicode MS",
-                "SimHei",
-                "Arial Bold",
-                "Arial-Bold",
-                "arialbd.ttf"
+                "simhei.ttf", "msyhbd.ttc", "STHeiti Medium.ttc",
+                "PingFang SC Semibold.ttc", "Arial Unicode MS", "SimHei",
             ]
-            for f in chinese_fonts:
-                try:
-                    if f in bold_fonts or any(bold_font in f.lower() for bold_font in ['bold', 'bd', 'black', 'heavy']):
-                        return ImageFont.truetype(f, size)
-                except Exception:
-                    continue
             for f in bold_fonts:
                 try:
                     return ImageFont.truetype(f, size)
@@ -327,7 +287,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
     total_height += line_spacing * (len(eng_lines)-1)
 
     if pho_lines:
-        total_height += eng_pho_spacing  # 使用可调节的英语-音标间距
+        total_height += eng_pho_spacing
         for line in pho_lines:
             bbox = draw.textbbox((0,0), line, font=pho_font)
             h = bbox[3] - bbox[1]
@@ -335,7 +295,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
         total_height += line_spacing * (len(pho_lines)-1)
 
     if chn_lines:
-        total_height += pho_chn_spacing  # 使用可调节的音标-中文间距
+        total_height += pho_chn_spacing
         for line in chn_lines:
             bbox = draw.textbbox((0,0), line, font=chn_font)
             h = bbox[3] - bbox[1]
@@ -400,7 +360,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
         y += h + line_spacing
 
     if pho_lines:
-        y += eng_pho_spacing  # 使用可调节的英语-音标间距
+        y += eng_pho_spacing
         for line in pho_lines:
             bbox = draw.textbbox((0,0), line, font=pho_font)
             w = bbox[2] - bbox[0]
@@ -412,7 +372,7 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
             y += h + line_spacing
 
     if chn_lines:
-        y += pho_chn_spacing  # 使用可调节的音标-中文间距
+        y += pho_chn_spacing
         for line in chn_lines:
             bbox = draw.textbbox((0,0), line, font=chn_font)
             w = bbox[2] - bbox[0]
@@ -426,54 +386,30 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
     return img
 
 # -----------------------
-# Edge TTS helpers
+# TTS 服务 - 多方案支持
 # -----------------------
 VOICE_OPTIONS = {
     "English - Female (US) - Aria": "en-US-AriaNeural",
     "English - Female (US) - Jenny": "en-US-JennyNeural",
-    "English - Female (US) - Sara": "en-US-SaraNeural",
-    "English - Male (US) - Davis": "en-US-DavisNeural",
     "English - Male (US) - Guy": "en-US-GuyNeural",
-    "English - Male (US) - Tony": "en-US-TonyNeural",
-    "English - Male (US) - Brian": "en-US-BrianNeural",
-    "English - Male (US) - Eric": "en-US-EricNeural",
-    "English - Female (UK) - Libby": "en-GB-LibbyNeural",
-    "English - Female (UK) - Sonia": "en-GB-SoniaNeural",
-    "English - Male (UK) - Ryan": "en-GB-RyanNeural",
-    "English - Male (UK) - Alfie": "en-GB-AlfieNeural",
-    "English - Male (UK) - George": "en-GB-GeorgeNeural",
-    "English - Female (AU) - Natasha": "en-AU-NatashaNeural",
-    "English - Male (AU) - William": "en-AU-WilliamNeural",
+    "English - Male (US) - Davis": "en-US-DavisNeural",
     "Chinese - Female (CN) - Xiaoxiao": "zh-CN-XiaoxiaoNeural",
     "Chinese - Female (CN) - Xiaoyi": "zh-CN-XiaoyiNeural",
-    "Chinese - Female (CN) - Xiaochen": "zh-CN-XiaochenNeural",
-    "Chinese - Female (CN) - Xiaohan": "zh-CN-XiaohanNeural",
-    "Chinese - Male (CN) - Yunfeng": "zh-CN-YunfengNeural",
-    "Chinese - Male (CN) - Yunyang": "zh-CN-YunyangNeural",
-    "Chinese - Male (CN) - Yunjian": "zh-CN-YunjianNeural",
-    "Chinese - Male (CN) - Yunze": "zh-CN-YunzeNeural",
-    "Chinese - Male (CN) - Yunkai": "zh-CN-YunkaiNeural",
     "Chinese - Male (CN) - Yunxi": "zh-CN-YunxiNeural",
-    "Chinese - Male (CN) - Yunhao": "zh-CN-YunhaoNeural",
-    "Chinese - Male (CN) - Yunlong": "zh-CN-YunlongNeural",
-    "Chinese - Female (TW) - HsiaoChen": "zh-TW-HsiaoChenNeural",
-    "Chinese - Female (TW) - HsiaoYu": "zh-TW-HsiaoYuNeural",
-    "Chinese - Male (TW) - YunJhe": "zh-TW-YunJheNeural",
-    "Chinese - Male (TW) - YunSong": "zh-TW-YunSongNeural"
 }
 
+# Edge TTS
 async def _edge_tts_save(text: str, voice_name: str, out_path: str, rate: str = "+0%"):
     try:
         communicate = edge_tts.Communicate(text, voice_name, rate=rate)
         await communicate.save(out_path)
         return True
     except Exception as e:
-        st.error(f"TTS生成失败: {e}")
+        st.error(f"Edge TTS生成失败: {e}")
         return False
 
 def generate_edge_audio(text, voice, speed=1.0, out_path=None):
     if not EDGE_TTS_AVAILABLE:
-        st.warning("Edge TTS 不可用")
         return None
     
     pct = int((speed - 1.0) * 100)
@@ -492,39 +428,119 @@ def generate_edge_audio(text, voice, speed=1.0, out_path=None):
                 os.unlink(out_path)
             return None
     except Exception as e:
-        st.error(f"生成音频异常: {e}")
         if os.path.exists(out_path):
             os.unlink(out_path)
         return None
 
-def preview_voice(voice_name, text, speed=1.0):
-    if not EDGE_TTS_AVAILABLE:
+# pyttsx3 TTS (离线)
+def generate_pyttsx3_audio(text, out_path=None):
+    if not PYTTSX3_AVAILABLE:
         return None
     
-    pct = int((speed - 1.0) * 100)
-    rate_str = f"{pct:+d}%"
+    if out_path is None:
+        fd, out_path = tempfile.mkstemp(suffix='.mp3')
+        os.close(fd)
     
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as f:
-            temp_path = f.name
+        engine = pyttsx3.init()
         
-        success = asyncio.run(_edge_tts_save(text, voice_name, temp_path, rate_str))
-        if success and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-            with open(temp_path, 'rb') as audio_file:
-                audio_bytes = audio_file.read()
-            os.unlink(temp_path)
-            return audio_bytes
+        # 设置属性
+        engine.setProperty('rate', 150)  # 语速
+        engine.setProperty('volume', 0.9)  # 音量
+        
+        # 保存到文件
+        engine.save_to_file(text, out_path)
+        engine.runAndWait()
+        
+        # 等待文件生成
+        time.sleep(1)
+        
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
         else:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+            if os.path.exists(out_path):
+                os.unlink(out_path)
             return None
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+        st.error(f"pyttsx3 TTS生成失败: {e}")
+        if os.path.exists(out_path):
+            os.unlink(out_path)
         return None
 
+# gTTS (Google TTS)
+def generate_gtts_audio(text, lang='en', out_path=None):
+    if not GTTS_AVAILABLE:
+        return None
+    
+    if out_path is None:
+        fd, out_path = tempfile.mkstemp(suffix='.mp3')
+        os.close(fd)
+    
+    try:
+        tts = gTTS(text=text, lang=lang, slow=False)
+        tts.save(out_path)
+        
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+        else:
+            if os.path.exists(out_path):
+                os.unlink(out_path)
+            return None
+    except Exception as e:
+        st.error(f"gTTS生成失败: {e}")
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+        return None
+
+# 统一的TTS生成函数
+def generate_audio_with_fallback(text, voice_info, tts_method, speed=1.0):
+    """使用多种TTS方法生成音频，有备用方案"""
+    
+    # 根据语音类型判断语言
+    if "Chinese" in voice_info or "zh-" in voice_info:
+        lang = 'zh'
+    else:
+        lang = 'en'
+    
+    out_path = tempfile.mktemp(suffix='.mp3')
+    
+    # 根据选择的TTS方法生成音频
+    if tts_method == "edge_tts" and EDGE_TTS_AVAILABLE:
+        result = generate_edge_audio(text, voice_info, speed, out_path)
+        if result:
+            return result
+    
+    if tts_method == "pyttsx3" and PYTTSX3_AVAILABLE:
+        result = generate_pyttsx3_audio(text, out_path)
+        if result:
+            return result
+    
+    if tts_method == "gtts" and GTTS_AVAILABLE:
+        result = generate_gtts_audio(text, lang, out_path)
+        if result:
+            return result
+    
+    # 如果所有方法都失败，尝试其他可用方法
+    if EDGE_TTS_AVAILABLE and tts_method != "edge_tts":
+        result = generate_edge_audio(text, voice_info, speed, out_path)
+        if result:
+            return result
+    
+    if PYTTSX3_AVAILABLE and tts_method != "pyttsx3":
+        result = generate_pyttsx3_audio(text, out_path)
+        if result:
+            return result
+    
+    if GTTS_AVAILABLE and tts_method != "gtts":
+        result = generate_gtts_audio(text, lang, out_path)
+        if result:
+            return result
+    
+    # 所有方法都失败
+    return None
+
 # -----------------------
-# 修复的音频合并函数
+# 音频处理函数
 # -----------------------
 def create_silent_audio(duration, output_path):
     """创建静音音频文件"""
@@ -534,57 +550,40 @@ def create_silent_audio(duration, output_path):
     ]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return True
-        return False
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
     except Exception as e:
-        st.warning(f"创建静音音频失败: {e}")
         return False
 
-def merge_audio_files_direct(audio_paths, per_duration, pause_duration, output_path):
-    """直接合并音频文件，不使用复杂的调整"""
+def merge_audio_files(audio_paths, per_duration, pause_duration, output_path):
+    """合并音频文件"""
     if not check_ffmpeg():
-        st.error("未检测到 ffmpeg，无法合并音频。")
         return None
     
-    # 创建临时目录
     with tempfile.TemporaryDirectory() as tmpdir:
-        # 创建文件列表
         list_file = os.path.join(tmpdir, "audio_list.txt")
         
         valid_files = []
         
-        # 写入文件列表
         with open(list_file, 'w') as f:
             for i, audio_path in enumerate(audio_paths):
                 if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
                     f.write(f"file '{audio_path}'\n")
                     valid_files.append(audio_path)
                     
-                    # 如果不是最后一个音频，添加停顿
                     if i < len(audio_paths) - 1 and pause_duration > 0:
                         pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
                         if create_silent_audio(pause_duration, pause_audio):
                             f.write(f"file '{pause_audio}'\n")
                             valid_files.append(pause_audio)
                 else:
-                    # 如果音频不存在，使用静音替代
                     silent_audio = os.path.join(tmpdir, f"silent_{i}.mp3")
                     if create_silent_audio(per_duration, silent_audio):
                         f.write(f"file '{silent_audio}'\n")
                         valid_files.append(silent_audio)
-                        
-                        if i < len(audio_paths) - 1 and pause_duration > 0:
-                            pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
-                            if create_silent_audio(pause_duration, pause_audio):
-                                f.write(f"file '{pause_audio}'\n")
-                                valid_files.append(pause_audio)
         
         if not valid_files:
-            st.error("没有有效的音频文件可合并")
             return None
-        
-        # 使用 concat 协议合并音频
+            
         cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", list_file, "-c", "copy", output_path
@@ -593,96 +592,18 @@ def merge_audio_files_direct(audio_paths, per_duration, pause_duration, output_p
         try:
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                st.success(f"✅ 音频合并成功，文件大小: {os.path.getsize(output_path)} 字节")
                 return output_path
             else:
-                st.error("合并后的音频文件无效")
                 return None
-        except subprocess.CalledProcessError as e:
-            st.error(f"音频合并失败: {e.stderr.decode() if e.stderr else str(e)}")
-            
-            # 尝试使用不同的方法
-            st.info("尝试使用备用方法合并音频...")
-            return merge_audio_files_alternative(audio_paths, per_duration, pause_duration, output_path)
-        except Exception as e:
-            st.error(f"音频合并异常: {e}")
+        except Exception:
             return None
-
-def merge_audio_files_alternative(audio_paths, per_duration, pause_duration, output_path):
-    """备用音频合并方法"""
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # 首先将所有音频转换为相同的格式
-            converted_files = []
-            for i, audio_path in enumerate(audio_paths):
-                if audio_path and os.path.exists(audio_path):
-                    converted_path = os.path.join(tmpdir, f"converted_{i}.wav")
-                    cmd = [
-                        "ffmpeg", "-y", "-i", audio_path,
-                        "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", converted_path
-                    ]
-                    try:
-                        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-                        if os.path.exists(converted_path):
-                            converted_files.append(converted_path)
-                    except:
-                        # 转换失败，跳过这个文件
-                        continue
-            
-            if not converted_files:
-                st.error("没有可用的音频文件进行合并")
-                return None
-            
-            # 创建文件列表
-            list_file = os.path.join(tmpdir, "audio_list.txt")
-            with open(list_file, 'w') as f:
-                for i, audio_path in enumerate(converted_files):
-                    f.write(f"file '{audio_path}'\n")
-                    
-                    # 添加停顿
-                    if i < len(converted_files) - 1 and pause_duration > 0:
-                        pause_audio = os.path.join(tmpdir, f"pause_{i}.wav")
-                        if create_silent_audio(pause_duration, pause_audio):
-                            f.write(f"file '{pause_audio}'\n")
-            
-            # 合并音频
-            temp_output = os.path.join(tmpdir, "temp_combined.wav")
-            cmd = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", list_file, "-c", "copy", temp_output
-            ]
-            
-            try:
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-                
-                # 转换为最终格式
-                cmd_convert = [
-                    "ffmpeg", "-y", "-i", temp_output,
-                    "-acodec", "libmp3lame", output_path
-                ]
-                subprocess.run(cmd_convert, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-                
-                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                    st.success(f"✅ 备用方法合并成功，文件大小: {os.path.getsize(output_path)} 字节")
-                    return output_path
-                else:
-                    st.error("备用方法合并失败")
-                    return None
-            except Exception as e:
-                st.error(f"备用方法合并失败: {e}")
-                return None
-    except Exception as e:
-        st.error(f"备用方法异常: {e}")
-        return None
 
 def merge_video_audio(video_path, audio_path, output_path):
     """合并视频和音频"""
     if not check_ffmpeg():
-        st.error("未检测到 ffmpeg，无法合并音频。")
         return None
         
     if not os.path.exists(video_path) or not os.path.exists(audio_path):
-        st.error("视频或音频文件不存在")
         return None
         
     cmd = [
@@ -692,42 +613,21 @@ def merge_video_audio(video_path, audio_path, output_path):
         "-c:v", "copy",
         "-c:a", "aac",
         "-strict", "experimental",
-        "-shortest",  # 确保视频长度与音频一致
+        "-shortest",
         output_path
     ]
     
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            st.success(f"✅ 视频音频合并成功，文件大小: {os.path.getsize(output_path)} 字节")
             return output_path
         else:
-            st.error(f"ffmpeg 合并失败: {result.stderr}")
-            
-            # 尝试使用不同的音频编码
-            st.info("尝试使用不同的音频编码...")
-            cmd_alt = [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-i", audio_path,
-                "-c:v", "copy",
-                "-c:a", "libmp3lame",
-                "-shortest",
-                output_path
-            ]
-            result_alt = subprocess.run(cmd_alt, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if result_alt.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                st.success("✅ 备用编码合并成功")
-                return output_path
-            else:
-                st.error(f"备用编码也失败: {result_alt.stderr}")
-                return None
-    except Exception as e:
-        st.error(f"调用 ffmpeg 失败: {e}")
+            return None
+    except Exception:
         return None
 
 # -----------------------
-# 修复后的视频生成函数
+# 视频生成函数
 # -----------------------
 def generate_video_with_optimization(df, settings, progress_bar, status_placeholder):
     try:
@@ -758,6 +658,7 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
             segment_order = settings['segment_order']
             voice_mapping = settings['voice_mapping']
             tts_speed = settings['tts_speed']
+            tts_method = settings['tts_method']
             eng_pho_spacing = settings['eng_pho_spacing']
             pho_chn_spacing = settings['pho_chn_spacing']
             line_spacing = settings['line_spacing']
@@ -773,7 +674,7 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
             audio_paths = []
             
             try:
-                # 先预生成所有音频
+                # 生成音频
                 status_placeholder.info("🎵 正在生成音频...")
                 audio_count = 0
                 total_audio_count = len(df) * len(segment_order)
@@ -783,16 +684,15 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                     chn = str(row['中文'])
                     
                     for j, segment_type in enumerate(segment_order):
-                        voice, text_type = voice_mapping[segment_type]
+                        voice_info, text_type = voice_mapping[segment_type]
                         text_to_speak = eng if text_type == "english" else chn
                         
-                        # 生成音频文件并保存在临时目录中
-                        audio_file = os.path.join(tmpdir, f"audio_{i}_{j}.mp3")
-                        generated_audio = generate_edge_audio(text_to_speak, voice, speed=tts_speed, out_path=audio_file)
+                        # 使用统一的TTS生成函数
+                        audio_file = generate_audio_with_fallback(text_to_speak, voice_info, tts_method, tts_speed)
                         
-                        if generated_audio and os.path.exists(generated_audio):
-                            audio_paths.append(generated_audio)
-                            st.success(f"✅ 音频 {audio_count+1}/{total_audio_count} 生成成功: {text_to_speak[:30]}...")
+                        if audio_file and os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
+                            audio_paths.append(audio_file)
+                            st.success(f"✅ 音频 {audio_count+1}/{total_audio_count} 生成成功")
                         else:
                             # 生成失败时使用静音
                             silent_audio = os.path.join(tmpdir, f"silent_{i}_{j}.mp3")
@@ -801,10 +701,8 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                                 st.warning(f"⚠️ 音频 {audio_count+1}/{total_audio_count} 生成失败，使用静音替代")
                             else:
                                 audio_paths.append(None)
-                                st.error(f"❌ 音频 {audio_count+1}/{total_audio_count} 完全失败")
                         
                         audio_count += 1
-                        # 更新音频生成进度
                         audio_progress = audio_count / total_audio_count * 0.4
                         progress_bar.progress(audio_progress)
                 
@@ -837,7 +735,6 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                     
                     frame_array = np.array(frame_img.convert('RGB'))
                     
-                    # 为每个片段重复帧
                     for segment_idx in range(len(segment_order)):
                         for _ in range(per_duration_frames):
                             writer.append_data(frame_array)
@@ -846,7 +743,6 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                                 video_progress = 0.4 + 0.4 * (current_frame / total_frames)
                                 progress_bar.progress(min(video_progress, 0.8))
                         
-                        # 如果不是最后一个片段，添加停顿
                         if not (i == len(df) - 1 and segment_idx == len(segment_order) - 1):
                             for _ in range(pause_duration_frames):
                                 writer.append_data(frame_array)
@@ -862,27 +758,23 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                 if writer is not None:
                     writer.close()
             
-            # 检查无声视频是否生成成功
             if not os.path.exists(video_no_audio) or os.path.getsize(video_no_audio) == 0:
                 st.error("无声视频生成失败")
                 return None
             
-            # 合并音频 - 使用修复后的合并函数
+            # 合并音频
             status_placeholder.info("🔊 正在合并音频...")
             progress_bar.progress(0.85)
             
-            # 检查是否有有效的音频文件
             valid_audio_paths = [p for p in audio_paths if p is not None and os.path.exists(p) and os.path.getsize(p) > 0]
             
             if valid_audio_paths and check_ffmpeg():
                 st.info(f"找到 {len(valid_audio_paths)}/{len(audio_paths)} 个有效音频文件")
                 
-                # 使用修复后的音频合并函数
                 combined_audio_path = os.path.join(tmpdir, "combined_audio.mp3")
-                merged_audio = merge_audio_files_direct(valid_audio_paths, per_duration, pause_duration, combined_audio_path)
+                merged_audio = merge_audio_files(valid_audio_paths, per_duration, pause_duration, combined_audio_path)
                 
                 if merged_audio and os.path.exists(merged_audio) and os.path.getsize(merged_audio) > 0:
-                    # 合并视频和音频
                     status_placeholder.info("🎵 正在合并视频和音频...")
                     progress_bar.progress(0.95)
                     
@@ -911,7 +803,6 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                 
     except Exception as e:
         st.error(f"生成失败: {e}")
-        st.text(traceback.format_exc())
         return None
 
 # -----------------------
@@ -920,14 +811,26 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
 st.markdown('<h1 class="main-header">🎬 旅行英语视频生成器</h1>', unsafe_allow_html=True)
 st.markdown("### 多音色循环播放 • 专业级视频制作")
 
-# 检查系统依赖
+# 系统检查
 with st.sidebar:
     st.markdown("## 🔧 系统检查")
     ffmpeg_available = check_ffmpeg()
+    
+    st.markdown("## 🎵 TTS 服务状态")
     if EDGE_TTS_AVAILABLE:
         st.success("✅ Edge TTS 可用")
     else:
         st.error("❌ Edge TTS 不可用")
+    
+    if PYTTSX3_AVAILABLE:
+        st.success("✅ pyttsx3 (离线) 可用")
+    else:
+        st.warning("⚠️ pyttsx3 不可用")
+    
+    if GTTS_AVAILABLE:
+        st.success("✅ gTTS (Google) 可用")
+    else:
+        st.warning("⚠️ gTTS 不可用")
 
 # 上传 Excel
 st.markdown('<div class="section-header">📁 1. 上传数据文件</div>', unsafe_allow_html=True)
@@ -1020,7 +923,37 @@ if df is not None:
                 line_spacing = st.slider("行内间距", 5, 50, 15, key="line_spacing")
 
     with tab2:
-        st.subheader("🔊 播放顺序设置")
+        st.subheader("🔊 TTS 服务选择")
+        
+        # TTS方法选择
+        tts_options = []
+        if EDGE_TTS_AVAILABLE:
+            tts_options.append("Edge TTS (推荐)")
+        if PYTTSX3_AVAILABLE:
+            tts_options.append("pyttsx3 (离线)")
+        if GTTS_AVAILABLE:
+            tts_options.append("gTTS (Google)")
+        
+        if not tts_options:
+            st.error("❌ 没有可用的TTS服务，请安装至少一个TTS库")
+            st.stop()
+        
+        tts_method_display = st.selectbox(
+            "选择TTS服务",
+            tts_options,
+            key="tts_method_display"
+        )
+        
+        # 映射显示名称到内部名称
+        tts_method_mapping = {
+            "Edge TTS (推荐)": "edge_tts",
+            "pyttsx3 (离线)": "pyttsx3", 
+            "gTTS (Google)": "gtts"
+        }
+        tts_method = tts_method_mapping[tts_method_display]
+        st.session_state.tts_method = tts_method
+        
+        st.subheader("🎵 播放顺序设置")
         
         col_order1, col_order2, col_order3, col_order4 = st.columns(4)
         with col_order1:
@@ -1034,51 +967,27 @@ if df is not None:
         
         st.markdown(f'<div class="success-card">🎵 播放顺序：{segment1_type} → {segment2_type} → {segment3_type} → {segment4_type}</div>', unsafe_allow_html=True)
 
-        st.subheader("🎙️ 音色选择与试听")
+        st.subheader("🎙️ 音色选择")
         
         col_voice1, col_voice2, col_voice3 = st.columns(3)
         
         with col_voice1:
             st.markdown("**英文男声**")
             male_english_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Male" in k and "English" in k}
-            male_english_label = st.selectbox("选择男声音色", list(male_english_voices.keys()), index=2, key="male_voice")
+            male_english_label = st.selectbox("选择男声音色", list(male_english_voices.keys()), index=0, key="male_voice")
             male_english_voice = male_english_voices[male_english_label]
-            
-            if st.button("🎧 试听男声", key="preview_male_english"):
-                preview_text = "Hello, this is a preview of the male English voice."
-                audio_bytes = preview_voice(male_english_voice, preview_text, tts_speed)
-                if audio_bytes:
-                    st.audio(audio_bytes, format="audio/mp3")
-                else:
-                    st.warning("试听生成失败")
 
         with col_voice2:
             st.markdown("**英文女声**")
             female_english_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Female" in k and "English" in k}
-            female_english_label = st.selectbox("选择女声音色", list(female_english_voices.keys()), index=2, key="female_voice")
+            female_english_label = st.selectbox("选择女声音色", list(female_english_voices.keys()), index=0, key="female_voice")
             female_english_voice = female_english_voices[female_english_label]
-            
-            if st.button("🎧 试听女声", key="preview_female_english"):
-                preview_text = "Hello, this is a preview of the female English voice."
-                audio_bytes = preview_voice(female_english_voice, preview_text, tts_speed)
-                if audio_bytes:
-                    st.audio(audio_bytes, format="audio/mp3")
-                else:
-                    st.warning("试听生成失败")
 
         with col_voice3:
             st.markdown("**中文音色**")
             chinese_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Chinese" in k}
             chinese_label = st.selectbox("选择中文音色", list(chinese_voices.keys()), index=0, key="chinese_voice")
             chinese_voice = chinese_voices[chinese_label]
-            
-            if st.button("🎧 试听中文", key="preview_chinese"):
-                preview_text = "你好，这是中文音色的预览。"
-                audio_bytes = preview_voice(chinese_voice, preview_text, tts_speed)
-                if audio_bytes:
-                    st.audio(audio_bytes, format="audio/mp3")
-                else:
-                    st.warning("试听生成失败")
 
         col_speed, col_pause = st.columns(2)
         with col_speed:
@@ -1167,22 +1076,18 @@ if df is not None:
     col_gen1, col_gen2, col_gen3 = st.columns([1, 2, 1])
     with col_gen2:
         if st.button("🎬 开始生成视频", use_container_width=True, key="generate_button"):
-            # 创建状态占位符和单一进度条
             status_placeholder = st.empty()
             progress_bar = st.progress(0)
             
-            with st.spinner("🎥 正在生成视频 - 会为每行生成4段音频，请耐心等待..."):
-                # 创建语音类型到实际语音的映射
+            with st.spinner("🎥 正在生成视频..."):
                 voice_mapping = {
                     "英文男声": (male_english_voice, "english"),
                     "英文女声": (female_english_voice, "english"), 
                     "中文音色": (chinese_voice, "chinese")
                 }
                 
-                # 获取播放顺序
                 segment_order = [segment1_type, segment2_type, segment3_type, segment4_type]
                 
-                # 收集所有设置
                 settings = {
                     'width': width,
                     'height': height,
@@ -1207,23 +1112,21 @@ if df is not None:
                     'segment_order': segment_order,
                     'voice_mapping': voice_mapping,
                     'tts_speed': tts_speed,
+                    'tts_method': st.session_state.tts_method,
                     'eng_pho_spacing': eng_pho_spacing,
                     'pho_chn_spacing': pho_chn_spacing,
                     'line_spacing': line_spacing
                 }
                 
-                # 使用优化的生成函数
                 video_bytes = generate_video_with_optimization(df, settings, progress_bar, status_placeholder)
                 
                 if video_bytes:
                     status_placeholder.success("✅ 视频生成完成！")
                     
-                    # 显示视频和下载按钮
                     col_vid1, col_vid2, col_vid3 = st.columns([1, 2, 1])
                     with col_vid2:
                         st.video(video_bytes)
                         
-                        # 下载按钮
                         st.download_button(
                             label="📥 下载视频",
                             data=video_bytes,
@@ -1247,36 +1150,26 @@ with st.sidebar:
         - **音标**: 音标标注（可选）
         """)
     
-    with st.expander("🎵 音频设置说明"):
+    with st.expander("🎵 TTS 服务说明"):
         st.markdown("""
-        - **播放顺序**: 设置4段音频的播放顺序
-        - **音色选择**: 为不同语言选择合适音色
-        - **语速调节**: 0.5x-2.0x 可调
-        - **停顿时间**: 每组之间的间隔
-        """)
-    
-    with st.expander("🎨 样式设置提示"):
-        st.markdown("""
-        - **背景**: 纯色或自定义图片
-        - **文字**: 支持中英文和音标
-        - **背景区域**: 增强文字可读性
-        - **字体**: 自动适配最佳字体
-        - **间距**: 可调节文字间距离
+        - **Edge TTS**: 微软在线服务，音质好但需要网络
+        - **pyttsx3**: 离线服务，稳定但音质一般
+        - **gTTS**: Google在线服务，需要网络
         """)
     
     with st.expander("⚙️ 系统要求"):
         st.markdown("""
-        - **网络**: 需要联网
+        - **FFmpeg**: 必须安装
+        - **网络**: 在线TTS服务需要联网
         - **浏览器**: 建议使用 Chrome/Firefox
         - **数据量**: 建议每次不超过50行
-        - **处理时间**: 根据数据量可能需要几分钟
         """)
 
 # 页脚
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "🎬 旅行英语视频生成器 | 专业级多音色视频制作工具"
+    "🎬 旅行英语视频生成器 | 多TTS服务支持"
     "</div>", 
     unsafe_allow_html=True
 )
