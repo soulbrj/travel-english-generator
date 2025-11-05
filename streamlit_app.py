@@ -11,15 +11,26 @@ import traceback
 import asyncio
 import base64
 import time
+import requests
 
 # 检查 ffmpeg 是否可用
 def check_ffmpeg():
     ffmpeg_path = shutil.which('ffmpeg')
     return ffmpeg_path
 
-# 只使用 gTTS，简化依赖
+# 尝试导入各种TTS库
+EDGE_TTS_AVAILABLE = False
+GTTS_AVAILABLE = False
+
+try:
+    import edge_tts
+    EDGE_TTS_AVAILABLE = True
+except Exception:
+    EDGE_TTS_AVAILABLE = False
+
 try:
     from gtts import gTTS
+    import gtts
     GTTS_AVAILABLE = True
 except Exception:
     GTTS_AVAILABLE = False
@@ -36,21 +47,35 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 3rem;
         font-weight: 700;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin-bottom: 1rem;
+        margin-bottom: 2rem;
     }
     .section-header {
-        font-size: 1.3rem;
+        font-size: 1.5rem;
         font-weight: 600;
         color: #1f2937;
-        margin: 1rem 0 0.5rem 0;
-        padding-bottom: 0.3rem;
+        margin: 1.5rem 0 1rem 0;
+        padding-bottom: 0.5rem;
         border-bottom: 2px solid #e5e7eb;
+    }
+    .info-card {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        margin: 1rem 0;
+    }
+    .success-card {
+        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        margin: 1rem 0;
     }
     .warning-card {
         background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);
@@ -70,13 +95,53 @@ st.markdown("""
         padding: 0.75rem 1.5rem;
         border-radius: 8px;
         font-weight: 600;
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    .upload-section {
+        border: 2px dashed #667eea;
+        border-radius: 10px;
+        padding: 2rem;
+        text-align: center;
+        background: rgba(102, 126, 234, 0.05);
+        margin: 1rem 0;
     }
     .preview-section {
         background: #f8fafc;
         border-radius: 10px;
-        padding: 1rem;
+        padding: 1.5rem;
         margin: 1rem 0;
         border-left: 4px solid #667eea;
+    }
+    .setting-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e5e7eb;
+        margin: 0.5rem 0;
+    }
+    .voice-preview-btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 0.5rem 1rem !important;
+        font-size: 0.9rem !important;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        border-radius: 4px 4px 0px 0px;
+        gap: 0px;
+        padding-top: 10px;
+        padding-bottom: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -84,6 +149,8 @@ st.markdown("""
 # 会话状态
 if 'bg_image' not in st.session_state:
     st.session_state.bg_image = None
+if 'tts_method' not in st.session_state:
+    st.session_state.tts_method = "gtts"  # 默认使用 gTTS
 
 # -----------------------
 # 工具函数
@@ -113,33 +180,81 @@ def wrap_text(text, max_chars):
         lines.append(' '.join(current))
     return lines
 
-def get_font(size, bold=False):
-    """获取字体"""
+def get_phonetic_font(size, bold=False):
+    """专门用于音标显示的字体加载函数"""
     try:
-        # 尝试加载系统字体
-        fonts = [
-            "Arial.ttf", "arial.ttf", 
-            "DejaVuSans.ttf", "LiberationSans-Regular.ttf"
+        font_files = [
+            "DoulosSIL-R.ttf", "CharisSIL-R.ttf", "NotoSansIPA-Regular.ttf",
+            "ArialUni.ttf", "l_10646.ttf", "DejaVuSans.ttf",
         ]
         
-        for font in fonts:
+        system_font_paths = [
+            "/usr/share/fonts/", "C:/Windows/Fonts/", 
+            "~/Library/Fonts/", "/Library/Fonts/",
+        ]
+        
+        if bold:
+            bold_fonts = [
+                "DoulosSIL-B.ttf", "CharisSIL-B.ttf", "NotoSansIPA-Bold.ttf",
+                "ArialUniBold.ttf", "DejaVuSans-Bold.ttf",
+            ]
+            for font in bold_fonts:
+                try:
+                    return ImageFont.truetype(font, size)
+                except:
+                    pass
+        
+        for font in font_files:
             try:
                 return ImageFont.truetype(font, size)
             except:
-                continue
+                pass
         
-        # 使用默认字体
         return ImageFont.load_default()
     except Exception as e:
         return ImageFont.load_default()
 
-def create_frame(english, chinese, phonetic, width=1280, height=720,
+def get_font(size, font_type="default", bold=False):
+    """获取字体，支持音标符号和中文"""
+    if font_type == "phonetic":
+        return get_phonetic_font(size, bold)
+    
+    try:
+        chinese_fonts = [
+            "simhei.ttf", "msyh.ttc", "simsun.ttc", "STHeiti Light.ttc",
+            "PingFang.ttc", "Arial Unicode MS", "SimHei", "Microsoft YaHei",
+            "WenQuanYi Micro Hei", "NotoSansCJK-Regular.ttc",
+        ]
+        
+        if bold:
+            bold_fonts = [
+                "simhei.ttf", "msyhbd.ttc", "STHeiti Medium.ttc",
+                "PingFang SC Semibold.ttc", "Arial Unicode MS", "SimHei",
+            ]
+            for f in bold_fonts:
+                try:
+                    return ImageFont.truetype(f, size)
+                except Exception:
+                    continue
+        
+        for f in chinese_fonts:
+            try:
+                return ImageFont.truetype(f, size)
+            except Exception:
+                continue
+        
+        return ImageFont.load_default()
+    except Exception as e:
+        return ImageFont.load_default()
+
+def create_frame(english, chinese, phonetic, width=1920, height=1080,
                  bg_color=(0,0,0), bg_image=None,
                  eng_color=(255,255,255), chn_color=(173,216,230), pho_color=(255,255,0),
-                 eng_size=60, chn_size=45, pho_size=35,
-                 text_bg_enabled=True, text_bg_color=(255,255,255,180), text_bg_padding=20,
-                 text_bg_radius=20):
-    """创建一帧图片 - 简化版本"""
+                 eng_size=80, chn_size=60, pho_size=50,
+                 text_bg_enabled=False, text_bg_color=(255,255,255,180), text_bg_padding=20,
+                 text_bg_radius=30, text_bg_width=None, text_bg_height=None,
+                 bold_text=True, eng_pho_spacing=30, pho_chn_spacing=30, line_spacing=15):
+    """创建一帧图片"""
     if bg_image:
         try:
             img = ImageOps.fit(bg_image.convert('RGB'), (width, height), Image.Resampling.LANCZOS)
@@ -150,43 +265,62 @@ def create_frame(english, chinese, phonetic, width=1280, height=720,
 
     draw = ImageDraw.Draw(img)
     
-    eng_font = get_font(eng_size)
-    chn_font = get_font(chn_size)
-    pho_font = get_font(pho_size)
+    eng_font = get_font(eng_size, "phonetic", bold=bold_text)
+    chn_font = get_font(chn_size, "chinese", bold=bold_text)
+    pho_font = get_font(pho_size, "phonetic", bold=bold_text)
 
-    eng_lines = wrap_text(english, 30)
-    chn_lines = wrap_text(chinese, 15)
-    pho_lines = wrap_text(phonetic, 35) if phonetic else []
+    eng_lines = wrap_text(english, 40)
+    chn_lines = wrap_text(chinese, 20)
+    pho_lines = wrap_text(phonetic, 45) if phonetic else []
 
-    # 计算总高度
     total_height = 0
+
     for line in eng_lines:
         bbox = draw.textbbox((0,0), line, font=eng_font)
-        total_height += bbox[3] - bbox[1]
-    for line in pho_lines:
-        bbox = draw.textbbox((0,0), line, font=pho_font)
-        total_height += bbox[3] - bbox[1]
-    for line in chn_lines:
-        bbox = draw.textbbox((0,0), line, font=chn_font)
-        total_height += bbox[3] - bbox[1]
-    
-    total_height += 20 * (len(eng_lines) + len(pho_lines) + len(chn_lines) - 1)  # 行间距
+        h = bbox[3] - bbox[1]
+        total_height += h
+    total_height += line_spacing * (len(eng_lines)-1)
 
-    # 文字背景
+    if pho_lines:
+        total_height += eng_pho_spacing
+        for line in pho_lines:
+            bbox = draw.textbbox((0,0), line, font=pho_font)
+            h = bbox[3] - bbox[1]
+            total_height += h
+        total_height += line_spacing * (len(pho_lines)-1)
+
+    if chn_lines:
+        total_height += pho_chn_spacing
+        for line in chn_lines:
+            bbox = draw.textbbox((0,0), line, font=chn_font)
+            h = bbox[3] - bbox[1]
+            total_height += h
+        total_height += line_spacing * (len(chn_lines)-1)
+
     if text_bg_enabled:
         max_width = 0
         for line in eng_lines:
             bbox = draw.textbbox((0,0), line, font=eng_font)
-            max_width = max(max_width, bbox[2] - bbox[0])
+            w = bbox[2] - bbox[0]
+            max_width = max(max_width, w)
         for line in pho_lines:
             bbox = draw.textbbox((0,0), line, font=pho_font)
-            max_width = max(max_width, bbox[2] - bbox[0])
+            w = bbox[2] - bbox[0]
+            max_width = max(max_width, w)
         for line in chn_lines:
             bbox = draw.textbbox((0,0), line, font=chn_font)
-            max_width = max(max_width, bbox[2] - bbox[0])
+            w = bbox[2] - bbox[0]
+            max_width = max(max_width, w)
         
-        bg_width = max_width + text_bg_padding * 2
-        bg_height = total_height + text_bg_padding * 2
+        if text_bg_width is None:
+            bg_width = max_width + text_bg_padding * 2
+        else:
+            bg_width = text_bg_width
+            
+        if text_bg_height is None:
+            bg_height = total_height + text_bg_padding * 2
+        else:
+            bg_height = text_bg_height
         
         bg_x = (width - bg_width) // 2
         bg_y = (height - bg_height) // 2
@@ -194,42 +328,170 @@ def create_frame(english, chinese, phonetic, width=1280, height=720,
         bg_layer = Image.new('RGBA', (bg_width, bg_height), (0,0,0,0))
         bg_draw = ImageDraw.Draw(bg_layer)
         
-        bg_draw.rounded_rectangle(
-            [(0, 0), (bg_width, bg_height)],
-            radius=text_bg_radius,
-            fill=text_bg_color
-        )
+        if text_bg_radius > 0:
+            bg_draw.rounded_rectangle(
+                [(0, 0), (bg_width, bg_height)],
+                radius=text_bg_radius,
+                fill=text_bg_color
+            )
+        else:
+            bg_draw.rectangle(
+                [(0, 0), (bg_width, bg_height)],
+                fill=text_bg_color
+            )
         
         img.paste(bg_layer, (bg_x, bg_y), bg_layer)
 
-    # 绘制文字
-    y = (height - total_height) // 2
+    y = (height - total_height)//2
 
     for line in eng_lines:
         bbox = draw.textbbox((0,0), line, font=eng_font)
         w = bbox[2] - bbox[0]
-        x = (width - w) // 2
+        h = bbox[3] - bbox[1]
+        x = (width - w)//2
+        shadow_offset = 3
+        draw.text((x+shadow_offset, y+shadow_offset), line, font=eng_font, fill=(0,0,0,128))
         draw.text((x, y), line, font=eng_font, fill=eng_color)
-        y += bbox[3] - bbox[1] + 20
+        y += h + line_spacing
 
-    for line in pho_lines:
-        bbox = draw.textbbox((0,0), line, font=pho_font)
-        w = bbox[2] - bbox[0]
-        x = (width - w) // 2
-        draw.text((x, y), line, font=pho_font, fill=pho_color)
-        y += bbox[3] - bbox[1] + 20
+    if pho_lines:
+        y += eng_pho_spacing
+        for line in pho_lines:
+            bbox = draw.textbbox((0,0), line, font=pho_font)
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+            x = (width - w)//2
+            shadow_offset = 3
+            draw.text((x+shadow_offset, y+shadow_offset), line, font=pho_font, fill=(0,0,0,128))
+            draw.text((x, y), line, font=pho_font, fill=pho_color)
+            y += h + line_spacing
 
-    for line in chn_lines:
-        bbox = draw.textbbox((0,0), line, font=chn_font)
-        w = bbox[2] - bbox[0]
-        x = (width - w) // 2
-        draw.text((x, y), line, font=chn_font, fill=chn_color)
-        y += bbox[3] - bbox[1] + 20
+    if chn_lines:
+        y += pho_chn_spacing
+        for line in chn_lines:
+            bbox = draw.textbbox((0,0), line, font=chn_font)
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+            x = (width - w)//2
+            shadow_offset = 3
+            draw.text((x+shadow_offset, y+shadow_offset), line, font=chn_font, fill=(0,0,0,128))
+            draw.text((x, y), line, font=chn_font, fill=chn_color)
+            y += h + line_spacing
 
     return img
 
 # -----------------------
-# 音频处理函数 - 简化版本
+# TTS 服务 - 改进版本
+# -----------------------
+VOICE_OPTIONS = {
+    "English - Female (US)": "en",
+    "English - Male (US)": "en",
+    "Chinese - Female (CN)": "zh-CN",
+    "Chinese - Male (CN)": "zh-CN",
+}
+
+# Edge TTS (备用方案)
+async def _edge_tts_save(text: str, voice_name: str, out_path: str, rate: str = "+0%"):
+    try:
+        communicate = edge_tts.Communicate(text, voice_name, rate=rate)
+        await communicate.save(out_path)
+        return True
+    except Exception as e:
+        return False
+
+def generate_edge_audio(text, voice, speed=1.0, out_path=None):
+    if not EDGE_TTS_AVAILABLE:
+        return None
+    
+    pct = int((speed - 1.0) * 100)
+    rate_str = f"{pct:+d}%"
+    
+    if out_path is None:
+        fd, out_path = tempfile.mkstemp(suffix='.mp3')
+        os.close(fd)
+    
+    try:
+        success = asyncio.run(_edge_tts_save(text, voice, out_path, rate_str))
+        if success and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+        else:
+            if os.path.exists(out_path):
+                os.unlink(out_path)
+            return None
+    except Exception as e:
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+        return None
+
+# gTTS (主要方案) - 改进版本
+def generate_gtts_audio(text, lang='en', slow=False, out_path=None):
+    if not GTTS_AVAILABLE:
+        return None
+    
+    if out_path is None:
+        fd, out_path = tempfile.mkstemp(suffix='.mp3')
+        os.close(fd)
+    
+    try:
+        # 添加重试机制
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                tts = gTTS(text=text, lang=lang, slow=slow)
+                tts.save(out_path)
+                
+                # 检查文件是否成功生成
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                    return out_path
+                else:
+                    time.sleep(1)  # 等待后重试
+            except Exception as e:
+                if attempt == max_retries - 1:  # 最后一次尝试
+                    raise e
+                time.sleep(1)  # 等待后重试
+        
+        # 所有重试都失败
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+        return None
+    except Exception as e:
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+        return None
+
+# 统一的TTS生成函数 - 改进版本
+def generate_audio_simple(text, lang='en', tts_method="gtts"):
+    """简化的TTS生成函数，专注于gTTS"""
+    
+    out_path = tempfile.mktemp(suffix='.mp3')
+    
+    # 主要使用 gTTS
+    if GTTS_AVAILABLE:
+        result = generate_gtts_audio(text, lang, False, out_path)
+        if result:
+            return result
+    
+    # 备用方案：Edge TTS
+    if EDGE_TTS_AVAILABLE and tts_method == "edge_tts":
+        # 根据语言选择合适的语音
+        if lang == 'zh-CN' or lang == 'zh':
+            voice = "zh-CN-XiaoxiaoNeural"
+        else:
+            voice = "en-US-AriaNeural"
+        
+        result = generate_edge_audio(text, voice, 1.0, out_path)
+        if result:
+            return result
+    
+    # 所有方法都失败，创建静音文件
+    silent_path = tempfile.mktemp(suffix='.mp3')
+    if create_silent_audio(3.0, silent_path):  # 3秒静音
+        return silent_path
+    
+    return None
+
+# -----------------------
+# 音频处理函数
 # -----------------------
 def create_silent_audio(duration, output_path):
     """创建静音音频文件"""
@@ -243,51 +505,36 @@ def create_silent_audio(duration, output_path):
     except Exception as e:
         return False
 
-def generate_gtts_audio_safe(text, lang='en', out_path=None):
-    """安全的gTTS生成函数，带重试机制"""
-    if not GTTS_AVAILABLE:
-        return None
-    
-    if out_path is None:
-        fd, out_path = tempfile.mkstemp(suffix='.mp3')
-        os.close(fd)
-    
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            tts = gTTS(text=text, lang=lang, slow=False)
-            tts.save(out_path)
-            
-            # 检查文件
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:  # 确保文件不是空的
-                return out_path
-            else:
-                time.sleep(1)  # 等待后重试
-        except Exception as e:
-            if attempt == max_retries - 1:
-                break
-            time.sleep(1)
-    
-    # 所有尝试都失败，创建静音
-    silent_path = tempfile.mktemp(suffix='.mp3')
-    if create_silent_audio(3.0, silent_path):
-        return silent_path
-    
-    return None
-
-def merge_audio_files_simple(audio_paths, output_path):
-    """简化音频合并"""
+def merge_audio_files(audio_paths, per_duration, pause_duration, output_path):
+    """合并音频文件"""
     if not check_ffmpeg():
         return None
     
     with tempfile.TemporaryDirectory() as tmpdir:
         list_file = os.path.join(tmpdir, "audio_list.txt")
         
-        with open(list_file, 'w') as f:
-            for audio_path in audio_paths:
-                if audio_path and os.path.exists(audio_path):
-                    f.write(f"file '{audio_path}'\n")
+        valid_files = []
         
+        with open(list_file, 'w') as f:
+            for i, audio_path in enumerate(audio_paths):
+                if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                    f.write(f"file '{audio_path}'\n")
+                    valid_files.append(audio_path)
+                    
+                    if i < len(audio_paths) - 1 and pause_duration > 0:
+                        pause_audio = os.path.join(tmpdir, f"pause_{i}.mp3")
+                        if create_silent_audio(pause_duration, pause_audio):
+                            f.write(f"file '{pause_audio}'\n")
+                            valid_files.append(pause_audio)
+                else:
+                    silent_audio = os.path.join(tmpdir, f"silent_{i}.mp3")
+                    if create_silent_audio(per_duration, silent_audio):
+                        f.write(f"file '{silent_audio}'\n")
+                        valid_files.append(silent_audio)
+        
+        if not valid_files:
+            return None
+            
         cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", list_file, "-c", "copy", output_path
@@ -295,13 +542,19 @@ def merge_audio_files_simple(audio_paths, output_path):
         
         try:
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-            return output_path if os.path.exists(output_path) else None
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return output_path
+            else:
+                return None
         except Exception:
             return None
 
-def merge_video_audio_simple(video_path, audio_path, output_path):
-    """简化视频音频合并"""
+def merge_video_audio(video_path, audio_path, output_path):
+    """合并视频和音频"""
     if not check_ffmpeg():
+        return None
+        
+    if not os.path.exists(video_path) or not os.path.exists(audio_path):
         return None
         
     cmd = [
@@ -310,143 +563,221 @@ def merge_video_audio_simple(video_path, audio_path, output_path):
         "-i", audio_path,
         "-c:v", "copy",
         "-c:a", "aac",
+        "-strict", "experimental",
         "-shortest",
         output_path
     ]
     
     try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        return output_path if os.path.exists(output_path) else None
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+        else:
+            return None
     except Exception:
         return None
 
 # -----------------------
-# 视频生成函数 - 优化版本
+# 视频生成函数 - 简化版本
 # -----------------------
-def generate_video_optimized(df, settings, progress_bar, status_placeholder):
-    """优化的视频生成函数，减少内存使用"""
+def generate_video_simple(df, settings, progress_bar, status_placeholder):
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # 使用较低的分辨率以减少内存使用
-            width = min(settings.get('width', 1280), 1280)
-            height = min(settings.get('height', 720), 720)
-            fps = settings.get('fps', 15)  # 降低帧率
-            per_duration = settings.get('per_duration', 3)
-            
             video_no_audio = os.path.join(tmpdir, "video_no_audio.mp4")
             final_video = os.path.join(tmpdir, "final_video.mp4")
             
-            # 限制处理的数据量
-            max_rows = min(len(df), 20)  # 最多处理20行
-            df_limited = df.head(max_rows)
+            width = settings['width']
+            height = settings['height']
+            fps = settings['fps']
+            per_duration = settings['per_duration']
+            pause_duration = settings['pause_duration']
+            bg_color = settings['bg_color']
+            bg_image = settings['bg_image']
+            eng_color = settings['eng_color']
+            chn_color = settings['chn_color']
+            pho_color = settings['pho_color']
+            eng_size = settings['eng_size']
+            chn_size = settings['chn_size']
+            pho_size = settings['pho_size']
+            text_bg_enabled = settings['text_bg_enabled']
+            text_bg_color = settings['text_bg_color']
+            text_bg_padding = settings['text_bg_padding']
+            text_bg_radius = settings['text_bg_radius']
+            text_bg_width = settings['text_bg_width']
+            text_bg_height = settings['text_bg_height']
+            bold_text = settings['bold_text']
+            segment_order = settings['segment_order']
+            voice_mapping = settings['voice_mapping']
+            tts_method = settings['tts_method']
+            eng_pho_spacing = settings['eng_pho_spacing']
+            pho_chn_spacing = settings['pho_chn_spacing']
+            line_spacing = settings['line_spacing']
             
-            if len(df) > max_rows:
-                st.warning(f"为了稳定性，只处理前 {max_rows} 行数据（共 {len(df)} 行）")
+            per_duration_frames = int(round(per_duration * fps))
+            pause_duration_frames = int(round(pause_duration * fps))
             
-            total_segments = len(df_limited) * 4  # 每行4段
-            progress_steps = total_segments + 10  # 进度步骤总数
+            total_segments = len(df) * len(segment_order)
+            total_frames = total_segments * per_duration_frames + (total_segments - 1) * pause_duration_frames
+            current_frame = 0
             
-            # 生成音频 - 分批处理
-            status_placeholder.info("🎵 正在生成音频（分批处理）...")
+            writer = None
             audio_paths = []
-            current_step = 0
             
-            for i, row in df_limited.iterrows():
-                eng = str(row['英语'])
-                chn = str(row['中文'])
+            try:
+                # 生成音频 - 简化版本
+                status_placeholder.info("🎵 正在生成音频...")
+                audio_count = 0
+                total_audio_count = len(df) * len(segment_order)
                 
-                # 为每行生成4段音频
-                for segment_type in ['英文', '中文', '英文', '中文']:
-                    text_to_speak = eng if segment_type == '英文' else chn
-                    lang = 'en' if segment_type == '英文' else 'zh-CN'
+                for i, row in df.iterrows():
+                    eng = str(row['英语'])
+                    chn = str(row['中文'])
                     
-                    audio_file = generate_gtts_audio_safe(text_to_speak, lang)
-                    audio_paths.append(audio_file)
+                    for j, segment_type in enumerate(segment_order):
+                        voice_info, text_type = voice_mapping[segment_type]
+                        text_to_speak = eng if text_type == "english" else chn
+                        
+                        # 根据语音类型选择语言
+                        lang = 'en' if text_type == "english" else 'zh-CN'
+                        
+                        # 使用简化的TTS生成函数
+                        audio_file = generate_audio_simple(text_to_speak, lang, tts_method)
+                        
+                        if audio_file and os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
+                            audio_paths.append(audio_file)
+                            # 减少日志输出，避免界面混乱
+                            if audio_count % 5 == 0:  # 每5个音频显示一次进度
+                                st.success(f"✅ 已生成 {audio_count+1}/{total_audio_count} 个音频")
+                        else:
+                            # 生成失败时使用静音
+                            silent_audio = os.path.join(tmpdir, f"silent_{i}_{j}.mp3")
+                            if create_silent_audio(per_duration, silent_audio):
+                                audio_paths.append(silent_audio)
+                        
+                        audio_count += 1
+                        audio_progress = audio_count / total_audio_count * 0.4
+                        progress_bar.progress(audio_progress)
+                
+                # 生成视频帧
+                status_placeholder.info("🎬 正在生成视频...")
+                writer = imageio.get_writer(video_no_audio, fps=fps, macro_block_size=1, format='FFMPEG', codec='libx264')
+                
+                for i, row in df.iterrows():
+                    eng = str(row['英语'])
+                    chn = str(row['中文'])
+                    pho = str(row['音标']) if pd.notna(row['音标']) else ""
                     
-                    current_step += 1
-                    progress_bar.progress(current_step / progress_steps)
+                    frame_img = create_frame(
+                        english=eng, chinese=chn, phonetic=pho,
+                        width=width, height=height,
+                        bg_color=bg_color, bg_image=bg_image,
+                        eng_color=eng_color, chn_color=chn_color, pho_color=pho_color,
+                        eng_size=eng_size, chn_size=chn_size, pho_size=pho_size,
+                        text_bg_enabled=text_bg_enabled,
+                        text_bg_color=text_bg_color,
+                        text_bg_padding=text_bg_padding,
+                        text_bg_radius=text_bg_radius,
+                        text_bg_width=text_bg_width,
+                        text_bg_height=text_bg_height,
+                        bold_text=bold_text,
+                        eng_pho_spacing=eng_pho_spacing,
+                        pho_chn_spacing=pho_chn_spacing,
+                        line_spacing=line_spacing
+                    )
                     
-                    # 每生成几个音频就稍微暂停，避免服务器过载
-                    if current_step % 4 == 0:
-                        time.sleep(0.5)
+                    frame_array = np.array(frame_img.convert('RGB'))
+                    
+                    for segment_idx in range(len(segment_order)):
+                        for _ in range(per_duration_frames):
+                            writer.append_data(frame_array)
+                            current_frame += 1
+                            if current_frame % 10 == 0:
+                                video_progress = 0.4 + 0.4 * (current_frame / total_frames)
+                                progress_bar.progress(min(video_progress, 0.8))
+                        
+                        if not (i == len(df) - 1 and segment_idx == len(segment_order) - 1):
+                            for _ in range(pause_duration_frames):
+                                writer.append_data(frame_array)
+                                current_frame += 1
+                                if current_frame % 10 == 0:
+                                    video_progress = 0.4 + 0.4 * (current_frame / total_frames)
+                                    progress_bar.progress(min(video_progress, 0.8))
             
-            # 生成视频帧
-            status_placeholder.info("🎬 正在生成视频帧...")
-            writer = imageio.get_writer(video_no_audio, fps=fps, macro_block_size=1, format='FFMPEG', codec='libx264')
+            except Exception as e:
+                st.error(f"生成视频过程中出错: {e}")
+                return None
+            finally:
+                if writer is not None:
+                    writer.close()
             
-            per_duration_frames = int(per_duration * fps)
-            
-            for i, row in df_limited.iterrows():
-                eng = str(row['英语'])
-                chn = str(row['中文'])
-                pho = str(row['音标']) if pd.notna(row['音标']) else ""
-                
-                frame_img = create_frame(
-                    english=eng, chinese=chn, phonetic=pho,
-                    width=width, height=height,
-                    bg_color=settings.get('bg_color', (0,0,0)),
-                    bg_image=settings.get('bg_image'),
-                    eng_color=settings.get('eng_color', (255,255,255)),
-                    chn_color=settings.get('chn_color', (173,216,230)),
-                    pho_color=settings.get('pho_color', (255,255,0)),
-                    eng_size=settings.get('eng_size', 60),
-                    chn_size=settings.get('chn_size', 45),
-                    pho_size=settings.get('pho_size', 35)
-                )
-                
-                frame_array = np.array(frame_img.convert('RGB'))
-                
-                # 为每行重复帧（4段）
-                for _ in range(4):
-                    for frame_idx in range(per_duration_frames):
-                        writer.append_data(frame_array)
-                        current_step += 1/progress_steps
-                        if frame_idx % 5 == 0:  # 每5帧更新一次进度
-                            progress_bar.progress(min(current_step / progress_steps, 0.9))
-            
-            writer.close()
+            if not os.path.exists(video_no_audio) or os.path.getsize(video_no_audio) == 0:
+                st.error("无声视频生成失败")
+                return None
             
             # 合并音频
             status_placeholder.info("🔊 正在合并音频...")
-            valid_audio_paths = [p for p in audio_paths if p and os.path.exists(p)]
+            progress_bar.progress(0.85)
             
-            if valid_audio_paths:
-                combined_audio = os.path.join(tmpdir, "combined.mp3")
-                if merge_audio_files_simple(valid_audio_paths, combined_audio):
-                    # 合并视频和音频
+            valid_audio_paths = [p for p in audio_paths if p is not None and os.path.exists(p) and os.path.getsize(p) > 0]
+            
+            if valid_audio_paths and check_ffmpeg():
+                st.info(f"找到 {len(valid_audio_paths)}/{len(audio_paths)} 个有效音频文件")
+                
+                combined_audio_path = os.path.join(tmpdir, "combined_audio.mp3")
+                merged_audio = merge_audio_files(valid_audio_paths, per_duration, pause_duration, combined_audio_path)
+                
+                if merged_audio and os.path.exists(merged_audio) and os.path.getsize(merged_audio) > 0:
                     status_placeholder.info("🎵 正在合并视频和音频...")
-                    if merge_video_audio_simple(video_no_audio, combined_audio, final_video):
+                    progress_bar.progress(0.95)
+                    
+                    merged_video = merge_video_audio(video_no_audio, merged_audio, final_video)
+                    if merged_video:
+                        final_video = merged_video
                         progress_bar.progress(1.0)
-                        with open(final_video, "rb") as f:
-                            return f.read()
+                        st.success("✅ 视频和音频合并成功！")
+                    else:
+                        st.warning("视频音频合并失败，将使用无声视频")
+                        final_video = video_no_audio
+                else:
+                    st.warning("音频合并失败，将使用无声视频")
+                    final_video = video_no_audio
+            else:
+                st.warning("没有有效的音频文件，将使用无声视频")
+                final_video = video_no_audio
             
-            # 如果音频合并失败，返回无声视频
-            progress_bar.progress(1.0)
-            with open(video_no_audio, "rb") as f:
-                return f.read()
+            if os.path.exists(final_video) and os.path.getsize(final_video) > 0:
+                with open(final_video, "rb") as f:
+                    video_bytes = f.read()
+                return video_bytes
+            else:
+                st.error("生成的视频文件不存在或为空")
+                return None
                 
     except Exception as e:
-        st.error(f"生成过程中出错: {str(e)}")
+        st.error(f"生成失败: {e}")
         return None
 
 # -----------------------
-# UI 与主流程 - 简化版本
+# UI 与主流程
 # -----------------------
 st.markdown('<h1 class="main-header">🎬 旅行英语视频生成器</h1>', unsafe_allow_html=True)
-st.markdown("### 简化稳定版本 • 适合在线使用")
+st.markdown("### 多音色循环播放 • 专业级视频制作")
 
 # 系统检查
 with st.sidebar:
-    st.markdown("## 🔧 系统状态")
-    if check_ffmpeg():
-        st.success("✅ FFmpeg 可用")
+    st.markdown("## 🔧 系统检查")
+    ffmpeg_available = check_ffmpeg()
+    
+    st.markdown("## 🎵 TTS 服务状态")
+    if EDGE_TTS_AVAILABLE:
+        st.success("✅ Edge TTS 可用")
     else:
-        st.error("❌ FFmpeg 不可用")
+        st.warning("⚠️ Edge TTS 不可用")
     
     if GTTS_AVAILABLE:
-        st.success("✅ gTTS 可用")
+        st.success("✅ gTTS (Google) 可用")
     else:
-        st.error("❌ gTTS 不可用")
+        st.error("❌ gTTS 不可用 - 这是主要TTS服务")
 
 # 上传 Excel
 st.markdown('<div class="section-header">📁 1. 上传数据文件</div>', unsafe_allow_html=True)
@@ -477,90 +808,286 @@ if df is not None:
     # 数据预览
     st.markdown('<div class="preview-section">', unsafe_allow_html=True)
     st.subheader("📊 数据预览")
-    st.dataframe(df.head(5), height=150, use_container_width=True)
-    st.info(f"📈 共 {len(df)} 行数据")
+    st.dataframe(df.head(10), height=220, use_container_width=True)
+    st.info(f"📈 共 {len(df)} 行数据，预计生成 {len(df) * 4} 段音频")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 简单设置
-    st.markdown('<div class="section-header">🎨 2. 视频设置</div>', unsafe_allow_html=True)
+    # 设置面板
+    st.markdown('<div class="section-header">🎨 2. 自定义设置</div>', unsafe_allow_html=True)
     
-    col1, col2 = st.columns(2)
-    with col1:
-        bg_type = st.radio("背景类型", ["纯色", "图片"], horizontal=True)
-        if bg_type == "纯色":
-            bg_color_hex = st.color_picker("背景颜色", "#000000")
-            bg_color = tuple(int(bg_color_hex[i:i+2],16) for i in (1,3,5))
-            bg_image = None
+    tab1, tab2, tab3, tab4 = st.tabs(["🎨 样式设置", "🔊 音频设置", "📝 文字背景", "⚙️ 视频参数"])
+    
+    with tab1:
+        col_bg, col_txt = st.columns([1, 2])
+        
+        with col_bg:
+            st.subheader("🎨 背景设置")
+            bg_type = st.radio("背景类型", ["纯色", "图片"], horizontal=True, key="bg_type")
+            if bg_type == "纯色":
+                bg_hex = st.color_picker("背景颜色", "#000000", key="bg_color_picker")
+                bg_color = tuple(int(bg_hex[i:i+2],16) for i in (1,3,5))
+                st.session_state.bg_image = None
+            else:
+                bg_file = st.file_uploader("上传背景图片", type=["jpg","jpeg","png"], key="bg_image_uploader")
+                if bg_file:
+                    try:
+                        st.session_state.bg_image = Image.open(bg_file)
+                        st.image(st.session_state.bg_image, caption="背景预览", use_container_width=True)
+                    except Exception as e:
+                        st.error(f"打开背景图片失败：{e}")
+                        st.session_state.bg_image = None
+                bg_color = (0,0,0)
+
+        with col_txt:
+            st.subheader("📝 文字样式")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown("**英语设置**")
+                eng_color = st.color_picker("颜色", "#FFFFFF", key="eng_color")
+                eng_color = tuple(int(eng_color[i:i+2],16) for i in (1,3,5))
+                eng_size = st.slider("字号", 20, 120, 80, key="eng_size")
+            with c2:
+                st.markdown("**音标设置**")
+                pho_color = st.color_picker("颜色", "#FFFF00", key="pho_color")
+                pho_color = tuple(int(pho_color[i:i+2],16) for i in (1,3,5))
+                pho_size = st.slider("字号", 16, 100, 50, key="pho_size")
+            with c3:
+                st.markdown("**中文设置**")
+                chn_color = st.color_picker("颜色", "#ADD8E6", key="chn_color")
+                chn_color = tuple(int(chn_color[i:i+2],16) for i in (1,3,5))
+                chn_size = st.slider("字号", 20, 120, 60, key="chn_size")
+            
+            bold_text = st.checkbox("文字加粗", value=True, key="bold_text")
+            
+            st.markdown("---")
+            st.subheader("📏 文字间距设置")
+            col_spacing1, col_spacing2, col_spacing3 = st.columns(3)
+            with col_spacing1:
+                eng_pho_spacing = st.slider("英语-音标间距", 10, 100, 30, key="eng_pho_spacing")
+            with col_spacing2:
+                pho_chn_spacing = st.slider("音标-中文间距", 10, 100, 50, key="pho_chn_spacing")
+            with col_spacing3:
+                line_spacing = st.slider("行内间距", 5, 50, 15, key="line_spacing")
+
+    with tab2:
+        st.subheader("🔊 TTS 服务选择")
+        
+        # TTS方法选择 - 简化版本
+        tts_options = []
+        if GTTS_AVAILABLE:
+            tts_options.append("gTTS (Google TTS - 推荐)")
+        if EDGE_TTS_AVAILABLE:
+            tts_options.append("Edge TTS (备用)")
+        
+        if not tts_options:
+            st.error("❌ 没有可用的TTS服务，视频将没有声音")
+            tts_method = "none"
         else:
-            bg_file = st.file_uploader("上传背景图片", type=["jpg","jpeg","png"])
-            if bg_file:
-                try:
-                    bg_image = Image.open(bg_file)
-                    st.image(bg_image, caption="背景预览", use_container_width=True)
-                except Exception as e:
-                    st.error(f"打开背景图片失败：{e}")
-                    bg_image = None
-            bg_color = (0,0,0)
+            tts_method_display = st.selectbox(
+                "选择TTS服务",
+                tts_options,
+                key="tts_method_display"
+            )
+            
+            # 映射显示名称到内部名称
+            tts_method_mapping = {
+                "gTTS (Google TTS - 推荐)": "gtts",
+                "Edge TTS (备用)": "edge_tts"
+            }
+            tts_method = tts_method_mapping[tts_method_display]
+            st.session_state.tts_method = tts_method
+        
+        st.subheader("🎵 播放顺序设置")
+        
+        col_order1, col_order2, col_order3, col_order4 = st.columns(4)
+        with col_order1:
+            segment1_type = st.selectbox("第1段", ["英文", "中文"], index=0, key="segment1")
+        with col_order2:
+            segment2_type = st.selectbox("第2段", ["英文", "中文"], index=1, key="segment2")
+        with col_order3:
+            segment3_type = st.selectbox("第3段", ["英文", "中文"], index=0, key="segment3")
+        with col_order4:
+            segment4_type = st.selectbox("第4段", ["英文", "中文"], index=1, key="segment4")
+        
+        st.markdown(f'<div class="success-card">🎵 播放顺序：{segment1_type} → {segment2_type} → {segment3_type} → {segment4_type}</div>', unsafe_allow_html=True)
+
+        col_pause = st.columns(1)[0]
+        with col_pause:
+            pause_duration = st.slider("每组停顿时间（秒）", 0.0, 3.0, 0.5, 0.1, key="pause_duration")
+
+    with tab3:
+        st.subheader("🖼️ 文字背景区域")
+        text_bg_enabled = st.checkbox("启用文字背景区域", value=True, key="text_bg_enabled")
+        if text_bg_enabled:
+            col_bg_size1, col_bg_size2 = st.columns(2)
+            with col_bg_size1:
+                text_bg_width = st.slider("文字背景宽度", 520, 1600, 1000, key="text_bg_width")
+            with col_bg_size2:
+                text_bg_height = st.slider("文字背景高度", 200, 800, 400, key="text_bg_height")
+                
+            text_bg_hex = st.color_picker("文字背景颜色", "#FFFFFF", key="text_bg_color")
+            text_bg_rgb = tuple(int(text_bg_hex[i:i+2],16) for i in (1,3,5))
+            text_bg_alpha = st.slider("文字背景透明度", 0, 255, 180, key="text_bg_alpha")
+            text_bg_color = text_bg_rgb + (text_bg_alpha,)
+            text_bg_padding = st.slider("文字背景内边距", 10, 50, 20, key="text_bg_padding")
+            text_bg_radius = st.slider("文字背景圆角", 0, 50, 30, key="text_bg_radius")
+        else:
+            text_bg_color = (255,255,255,180)
+            text_bg_padding = 20
+            text_bg_radius = 30
+            text_bg_width = None
+            text_bg_height = None
+
+    with tab4:
+        st.subheader("⚙️ 视频参数")
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            per_duration = st.slider("每段音频时长（秒）", 2, 8, 4, key="per_duration")
+            fps = st.slider("帧率", 8, 30, 20, key="fps")
+        with col_v2:
+            width = st.selectbox("分辨率宽度", [640, 960, 1280, 1920], index=3, key="width")
+            height = int(width * 9 / 16)
+            st.info(f"分辨率: {width} × {height}")
+
+    # 预览单行
+    st.markdown('<div class="section-header">👁️ 3. 预览效果</div>', unsafe_allow_html=True)
     
-    with col2:
-        per_duration = st.slider("每段时长（秒）", 2, 5, 3)
-        resolution = st.selectbox("分辨率", ["640x360", "854x480", "1280x720"], index=1)
-        width, height = map(int, resolution.split('x'))
+    if not df.empty:
+        st.markdown('<div class="preview-section">', unsafe_allow_html=True)
+        col_preview1, col_preview2 = st.columns([1, 2])
+        
+        with col_preview1:
+            idx = st.slider("选择预览行", 0, min(len(df)-1, 9), 0, key="preview_row")
+            row = df.iloc[idx]
+            st.write(f"**英语:** {row['英语']}")
+            st.write(f"**音标:** {row['音标'] if pd.notna(row['音标']) else '无'}")
+            st.write(f"**中文:** {row['中文']}")
+        
+        with col_preview2:
+            preview_img = create_frame(
+                english=str(row['英语']),
+                chinese=str(row['中文']),
+                phonetic=str(row['音标']) if pd.notna(row['音标']) else "",
+                width=width, height=height,
+                bg_color=bg_color, bg_image=st.session_state.bg_image,
+                eng_color=eng_color, chn_color=chn_color, pho_color=pho_color,
+                eng_size=eng_size, chn_size=chn_size, pho_size=pho_size,
+                text_bg_enabled=text_bg_enabled,
+                text_bg_color=text_bg_color,
+                text_bg_padding=text_bg_padding,
+                text_bg_radius=text_bg_radius,
+                text_bg_width=text_bg_width,
+                text_bg_height=text_bg_height,
+                bold_text=bold_text,
+                eng_pho_spacing=eng_pho_spacing,
+                pho_chn_spacing=pho_chn_spacing,
+                line_spacing=line_spacing
+            )
+            st.image(preview_img, caption="帧预览", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # 生成按钮
-    st.markdown('<div class="section-header">🚀 3. 生成视频</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">🚀 4. 生成视频</div>', unsafe_allow_html=True)
     
     if len(df) > 20:
-        st.markdown(f'<div class="warning-card">⚠️ 数据量较大，为了稳定性将只处理前20行数据</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="warning-card">⚠️ 数据量较大（{len(df)} 行），生成可能需要一些时间。建议分批处理或减少每段音频时长。</div>', unsafe_allow_html=True)
     
-    if st.button("🎬 开始生成视频", use_container_width=True, type="primary"):
-        if not GTTS_AVAILABLE:
-            st.error("gTTS 不可用，无法生成音频")
-            st.stop()
-        
-        status_placeholder = st.empty()
-        progress_bar = st.progress(0)
-        
-        with st.spinner("正在生成视频，请耐心等待..."):
-            settings = {
-                'width': width,
-                'height': height,
-                'fps': 15,
-                'per_duration': per_duration,
-                'bg_color': bg_color,
-                'bg_image': bg_image,
-                'eng_color': (255,255,255),
-                'chn_color': (173,216,230),
-                'pho_color': (255,255,0),
-                'eng_size': 60,
-                'chn_size': 45,
-                'pho_size': 35
-            }
+    col_gen1, col_gen2, col_gen3 = st.columns([1, 2, 1])
+    with col_gen2:
+        if st.button("🎬 开始生成视频", use_container_width=True, key="generate_button"):
+            status_placeholder = st.empty()
+            progress_bar = st.progress(0)
             
-            video_bytes = generate_video_optimized(df, settings, progress_bar, status_placeholder)
-            
-            if video_bytes:
-                status_placeholder.success("✅ 视频生成完成！")
+            with st.spinner("🎥 正在生成视频..."):
+                # 简化的语音映射
+                voice_mapping = {
+                    "英文": ("en", "english"),
+                    "中文": ("zh-CN", "chinese")
+                }
                 
-                # 显示视频
-                st.video(video_bytes)
+                segment_order = [segment1_type, segment2_type, segment3_type, segment4_type]
                 
-                # 下载按钮
-                st.download_button(
-                    label="📥 下载视频",
-                    data=video_bytes,
-                    file_name="english_video.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-                )
-            else:
-                status_placeholder.error("视频生成失败")
+                settings = {
+                    'width': width,
+                    'height': height,
+                    'fps': fps,
+                    'per_duration': per_duration,
+                    'pause_duration': pause_duration,
+                    'bg_color': bg_color,
+                    'bg_image': st.session_state.bg_image,
+                    'eng_color': eng_color,
+                    'chn_color': chn_color,
+                    'pho_color': pho_color,
+                    'eng_size': eng_size,
+                    'chn_size': chn_size,
+                    'pho_size': pho_size,
+                    'text_bg_enabled': text_bg_enabled,
+                    'text_bg_color': text_bg_color,
+                    'text_bg_padding': text_bg_padding,
+                    'text_bg_radius': text_bg_radius,
+                    'text_bg_width': text_bg_width,
+                    'text_bg_height': text_bg_height,
+                    'bold_text': bold_text,
+                    'segment_order': segment_order,
+                    'voice_mapping': voice_mapping,
+                    'tts_method': st.session_state.tts_method,
+                    'eng_pho_spacing': eng_pho_spacing,
+                    'pho_chn_spacing': pho_chn_spacing,
+                    'line_spacing': line_spacing
+                }
+                
+                video_bytes = generate_video_simple(df, settings, progress_bar, status_placeholder)
+                
+                if video_bytes:
+                    status_placeholder.success("✅ 视频生成完成！")
+                    
+                    col_vid1, col_vid2, col_vid3 = st.columns([1, 2, 1])
+                    with col_vid2:
+                        st.video(video_bytes)
+                        
+                        st.download_button(
+                            label="📥 下载视频",
+                            data=video_bytes,
+                            file_name="travel_english_video.mp4",
+                            mime="video/mp4",
+                            use_container_width=True,
+                            key="download_button"
+                        )
+                else:
+                    status_placeholder.error("视频生成失败，请检查系统配置或重试")
+
+# 侧边栏信息
+with st.sidebar:
+    st.markdown("## ℹ️ 使用指南")
+    
+    with st.expander("📝 数据格式要求", expanded=True):
+        st.markdown("""
+        Excel 文件必须包含以下列：
+        - **英语**: 英文句子
+        - **中文**: 中文翻译  
+        - **音标**: 音标标注（可选）
+        """)
+    
+    with st.expander("🎵 TTS 服务说明"):
+        st.markdown("""
+        - **gTTS**: Google在线服务，需要网络连接
+        - **Edge TTS**: 微软在线服务，备用方案
+        - 如果TTS服务失败，将使用静音替代
+        """)
+    
+    with st.expander("⚙️ 系统要求"):
+        st.markdown("""
+        - **FFmpeg**: 必须安装
+        - **网络**: 需要联网使用TTS服务
+        - **浏览器**: 建议使用 Chrome/Firefox
+        - **数据量**: 建议每次不超过50行
+        """)
 
 # 页脚
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "🎬 旅行英语视频生成器 | 优化稳定版本"
+    "🎬 旅行英语视频生成器 | 简化稳定版本"
     "</div>", 
     unsafe_allow_html=True
 )
