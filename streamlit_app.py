@@ -11,6 +11,7 @@ import traceback
 import asyncio
 import base64
 import time
+import requests
 
 # 检查 ffmpeg 是否可用
 def check_ffmpeg():
@@ -19,7 +20,6 @@ def check_ffmpeg():
 
 # 尝试导入各种TTS库
 EDGE_TTS_AVAILABLE = False
-PYTTSX3_AVAILABLE = False
 GTTS_AVAILABLE = False
 
 try:
@@ -29,13 +29,8 @@ except Exception:
     EDGE_TTS_AVAILABLE = False
 
 try:
-    import pyttsx3
-    PYTTSX3_AVAILABLE = True
-except Exception:
-    PYTTSX3_AVAILABLE = False
-
-try:
     from gtts import gTTS
+    import gtts
     GTTS_AVAILABLE = True
 except Exception:
     GTTS_AVAILABLE = False
@@ -155,7 +150,7 @@ st.markdown("""
 if 'bg_image' not in st.session_state:
     st.session_state.bg_image = None
 if 'tts_method' not in st.session_state:
-    st.session_state.tts_method = "edge_tts"
+    st.session_state.tts_method = "gtts"  # 默认使用 gTTS
 
 # -----------------------
 # 工具函数
@@ -386,26 +381,22 @@ def create_frame(english, chinese, phonetic, width=1920, height=1080,
     return img
 
 # -----------------------
-# TTS 服务 - 多方案支持
+# TTS 服务 - 改进版本
 # -----------------------
 VOICE_OPTIONS = {
-    "English - Female (US) - Aria": "en-US-AriaNeural",
-    "English - Female (US) - Jenny": "en-US-JennyNeural",
-    "English - Male (US) - Guy": "en-US-GuyNeural",
-    "English - Male (US) - Davis": "en-US-DavisNeural",
-    "Chinese - Female (CN) - Xiaoxiao": "zh-CN-XiaoxiaoNeural",
-    "Chinese - Female (CN) - Xiaoyi": "zh-CN-XiaoyiNeural",
-    "Chinese - Male (CN) - Yunxi": "zh-CN-YunxiNeural",
+    "English - Female (US)": "en",
+    "English - Male (US)": "en",
+    "Chinese - Female (CN)": "zh-CN",
+    "Chinese - Male (CN)": "zh-CN",
 }
 
-# Edge TTS
+# Edge TTS (备用方案)
 async def _edge_tts_save(text: str, voice_name: str, out_path: str, rate: str = "+0%"):
     try:
         communicate = edge_tts.Communicate(text, voice_name, rate=rate)
         await communicate.save(out_path)
         return True
     except Exception as e:
-        st.error(f"Edge TTS生成失败: {e}")
         return False
 
 def generate_edge_audio(text, voice, speed=1.0, out_path=None):
@@ -432,43 +423,8 @@ def generate_edge_audio(text, voice, speed=1.0, out_path=None):
             os.unlink(out_path)
         return None
 
-# pyttsx3 TTS (离线)
-def generate_pyttsx3_audio(text, out_path=None):
-    if not PYTTSX3_AVAILABLE:
-        return None
-    
-    if out_path is None:
-        fd, out_path = tempfile.mkstemp(suffix='.mp3')
-        os.close(fd)
-    
-    try:
-        engine = pyttsx3.init()
-        
-        # 设置属性
-        engine.setProperty('rate', 150)  # 语速
-        engine.setProperty('volume', 0.9)  # 音量
-        
-        # 保存到文件
-        engine.save_to_file(text, out_path)
-        engine.runAndWait()
-        
-        # 等待文件生成
-        time.sleep(1)
-        
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            return out_path
-        else:
-            if os.path.exists(out_path):
-                os.unlink(out_path)
-            return None
-    except Exception as e:
-        st.error(f"pyttsx3 TTS生成失败: {e}")
-        if os.path.exists(out_path):
-            os.unlink(out_path)
-        return None
-
-# gTTS (Google TTS)
-def generate_gtts_audio(text, lang='en', out_path=None):
+# gTTS (主要方案) - 改进版本
+def generate_gtts_audio(text, lang='en', slow=False, out_path=None):
     if not GTTS_AVAILABLE:
         return None
     
@@ -477,66 +433,61 @@ def generate_gtts_audio(text, lang='en', out_path=None):
         os.close(fd)
     
     try:
-        tts = gTTS(text=text, lang=lang, slow=False)
-        tts.save(out_path)
+        # 添加重试机制
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                tts = gTTS(text=text, lang=lang, slow=slow)
+                tts.save(out_path)
+                
+                # 检查文件是否成功生成
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                    return out_path
+                else:
+                    time.sleep(1)  # 等待后重试
+            except Exception as e:
+                if attempt == max_retries - 1:  # 最后一次尝试
+                    raise e
+                time.sleep(1)  # 等待后重试
         
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            return out_path
-        else:
-            if os.path.exists(out_path):
-                os.unlink(out_path)
-            return None
+        # 所有重试都失败
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+        return None
     except Exception as e:
-        st.error(f"gTTS生成失败: {e}")
         if os.path.exists(out_path):
             os.unlink(out_path)
         return None
 
-# 统一的TTS生成函数
-def generate_audio_with_fallback(text, voice_info, tts_method, speed=1.0):
-    """使用多种TTS方法生成音频，有备用方案"""
-    
-    # 根据语音类型判断语言
-    if "Chinese" in voice_info or "zh-" in voice_info:
-        lang = 'zh'
-    else:
-        lang = 'en'
+# 统一的TTS生成函数 - 改进版本
+def generate_audio_simple(text, lang='en', tts_method="gtts"):
+    """简化的TTS生成函数，专注于gTTS"""
     
     out_path = tempfile.mktemp(suffix='.mp3')
     
-    # 根据选择的TTS方法生成音频
-    if tts_method == "edge_tts" and EDGE_TTS_AVAILABLE:
-        result = generate_edge_audio(text, voice_info, speed, out_path)
+    # 主要使用 gTTS
+    if GTTS_AVAILABLE:
+        result = generate_gtts_audio(text, lang, False, out_path)
         if result:
             return result
     
-    if tts_method == "pyttsx3" and PYTTSX3_AVAILABLE:
-        result = generate_pyttsx3_audio(text, out_path)
+    # 备用方案：Edge TTS
+    if EDGE_TTS_AVAILABLE and tts_method == "edge_tts":
+        # 根据语言选择合适的语音
+        if lang == 'zh-CN' or lang == 'zh':
+            voice = "zh-CN-XiaoxiaoNeural"
+        else:
+            voice = "en-US-AriaNeural"
+        
+        result = generate_edge_audio(text, voice, 1.0, out_path)
         if result:
             return result
     
-    if tts_method == "gtts" and GTTS_AVAILABLE:
-        result = generate_gtts_audio(text, lang, out_path)
-        if result:
-            return result
+    # 所有方法都失败，创建静音文件
+    silent_path = tempfile.mktemp(suffix='.mp3')
+    if create_silent_audio(3.0, silent_path):  # 3秒静音
+        return silent_path
     
-    # 如果所有方法都失败，尝试其他可用方法
-    if EDGE_TTS_AVAILABLE and tts_method != "edge_tts":
-        result = generate_edge_audio(text, voice_info, speed, out_path)
-        if result:
-            return result
-    
-    if PYTTSX3_AVAILABLE and tts_method != "pyttsx3":
-        result = generate_pyttsx3_audio(text, out_path)
-        if result:
-            return result
-    
-    if GTTS_AVAILABLE and tts_method != "gtts":
-        result = generate_gtts_audio(text, lang, out_path)
-        if result:
-            return result
-    
-    # 所有方法都失败
     return None
 
 # -----------------------
@@ -627,9 +578,9 @@ def merge_video_audio(video_path, audio_path, output_path):
         return None
 
 # -----------------------
-# 视频生成函数
+# 视频生成函数 - 简化版本
 # -----------------------
-def generate_video_with_optimization(df, settings, progress_bar, status_placeholder):
+def generate_video_simple(df, settings, progress_bar, status_placeholder):
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             video_no_audio = os.path.join(tmpdir, "video_no_audio.mp4")
@@ -657,7 +608,6 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
             bold_text = settings['bold_text']
             segment_order = settings['segment_order']
             voice_mapping = settings['voice_mapping']
-            tts_speed = settings['tts_speed']
             tts_method = settings['tts_method']
             eng_pho_spacing = settings['eng_pho_spacing']
             pho_chn_spacing = settings['pho_chn_spacing']
@@ -674,7 +624,7 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
             audio_paths = []
             
             try:
-                # 生成音频
+                # 生成音频 - 简化版本
                 status_placeholder.info("🎵 正在生成音频...")
                 audio_count = 0
                 total_audio_count = len(df) * len(segment_order)
@@ -687,20 +637,22 @@ def generate_video_with_optimization(df, settings, progress_bar, status_placehol
                         voice_info, text_type = voice_mapping[segment_type]
                         text_to_speak = eng if text_type == "english" else chn
                         
-                        # 使用统一的TTS生成函数
-                        audio_file = generate_audio_with_fallback(text_to_speak, voice_info, tts_method, tts_speed)
+                        # 根据语音类型选择语言
+                        lang = 'en' if text_type == "english" else 'zh-CN'
+                        
+                        # 使用简化的TTS生成函数
+                        audio_file = generate_audio_simple(text_to_speak, lang, tts_method)
                         
                         if audio_file and os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
                             audio_paths.append(audio_file)
-                            st.success(f"✅ 音频 {audio_count+1}/{total_audio_count} 生成成功")
+                            # 减少日志输出，避免界面混乱
+                            if audio_count % 5 == 0:  # 每5个音频显示一次进度
+                                st.success(f"✅ 已生成 {audio_count+1}/{total_audio_count} 个音频")
                         else:
                             # 生成失败时使用静音
                             silent_audio = os.path.join(tmpdir, f"silent_{i}_{j}.mp3")
                             if create_silent_audio(per_duration, silent_audio):
                                 audio_paths.append(silent_audio)
-                                st.warning(f"⚠️ 音频 {audio_count+1}/{total_audio_count} 生成失败，使用静音替代")
-                            else:
-                                audio_paths.append(None)
                         
                         audio_count += 1
                         audio_progress = audio_count / total_audio_count * 0.4
@@ -820,17 +772,12 @@ with st.sidebar:
     if EDGE_TTS_AVAILABLE:
         st.success("✅ Edge TTS 可用")
     else:
-        st.error("❌ Edge TTS 不可用")
-    
-    if PYTTSX3_AVAILABLE:
-        st.success("✅ pyttsx3 (离线) 可用")
-    else:
-        st.warning("⚠️ pyttsx3 不可用")
+        st.warning("⚠️ Edge TTS 不可用")
     
     if GTTS_AVAILABLE:
         st.success("✅ gTTS (Google) 可用")
     else:
-        st.warning("⚠️ gTTS 不可用")
+        st.error("❌ gTTS 不可用 - 这是主要TTS服务")
 
 # 上传 Excel
 st.markdown('<div class="section-header">📁 1. 上传数据文件</div>', unsafe_allow_html=True)
@@ -925,74 +872,46 @@ if df is not None:
     with tab2:
         st.subheader("🔊 TTS 服务选择")
         
-        # TTS方法选择
+        # TTS方法选择 - 简化版本
         tts_options = []
-        if EDGE_TTS_AVAILABLE:
-            tts_options.append("Edge TTS (推荐)")
-        if PYTTSX3_AVAILABLE:
-            tts_options.append("pyttsx3 (离线)")
         if GTTS_AVAILABLE:
-            tts_options.append("gTTS (Google)")
+            tts_options.append("gTTS (Google TTS - 推荐)")
+        if EDGE_TTS_AVAILABLE:
+            tts_options.append("Edge TTS (备用)")
         
         if not tts_options:
-            st.error("❌ 没有可用的TTS服务，请安装至少一个TTS库")
-            st.stop()
-        
-        tts_method_display = st.selectbox(
-            "选择TTS服务",
-            tts_options,
-            key="tts_method_display"
-        )
-        
-        # 映射显示名称到内部名称
-        tts_method_mapping = {
-            "Edge TTS (推荐)": "edge_tts",
-            "pyttsx3 (离线)": "pyttsx3", 
-            "gTTS (Google)": "gtts"
-        }
-        tts_method = tts_method_mapping[tts_method_display]
-        st.session_state.tts_method = tts_method
+            st.error("❌ 没有可用的TTS服务，视频将没有声音")
+            tts_method = "none"
+        else:
+            tts_method_display = st.selectbox(
+                "选择TTS服务",
+                tts_options,
+                key="tts_method_display"
+            )
+            
+            # 映射显示名称到内部名称
+            tts_method_mapping = {
+                "gTTS (Google TTS - 推荐)": "gtts",
+                "Edge TTS (备用)": "edge_tts"
+            }
+            tts_method = tts_method_mapping[tts_method_display]
+            st.session_state.tts_method = tts_method
         
         st.subheader("🎵 播放顺序设置")
         
         col_order1, col_order2, col_order3, col_order4 = st.columns(4)
         with col_order1:
-            segment1_type = st.selectbox("第1段", ["英文男声", "英文女声", "中文音色"], index=0, key="segment1")
+            segment1_type = st.selectbox("第1段", ["英文", "中文"], index=0, key="segment1")
         with col_order2:
-            segment2_type = st.selectbox("第2段", ["英文男声", "英文女声", "中文音色"], index=1, key="segment2")
+            segment2_type = st.selectbox("第2段", ["英文", "中文"], index=1, key="segment2")
         with col_order3:
-            segment3_type = st.selectbox("第3段", ["英文男声", "英文女声", "中文音色"], index=2, key="segment3")
+            segment3_type = st.selectbox("第3段", ["英文", "中文"], index=0, key="segment3")
         with col_order4:
-            segment4_type = st.selectbox("第4段", ["英文男声", "英文女声", "中文音色"], index=0, key="segment4")
+            segment4_type = st.selectbox("第4段", ["英文", "中文"], index=1, key="segment4")
         
         st.markdown(f'<div class="success-card">🎵 播放顺序：{segment1_type} → {segment2_type} → {segment3_type} → {segment4_type}</div>', unsafe_allow_html=True)
 
-        st.subheader("🎙️ 音色选择")
-        
-        col_voice1, col_voice2, col_voice3 = st.columns(3)
-        
-        with col_voice1:
-            st.markdown("**英文男声**")
-            male_english_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Male" in k and "English" in k}
-            male_english_label = st.selectbox("选择男声音色", list(male_english_voices.keys()), index=0, key="male_voice")
-            male_english_voice = male_english_voices[male_english_label]
-
-        with col_voice2:
-            st.markdown("**英文女声**")
-            female_english_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Female" in k and "English" in k}
-            female_english_label = st.selectbox("选择女声音色", list(female_english_voices.keys()), index=0, key="female_voice")
-            female_english_voice = female_english_voices[female_english_label]
-
-        with col_voice3:
-            st.markdown("**中文音色**")
-            chinese_voices = {k:v for k,v in VOICE_OPTIONS.items() if "Chinese" in k}
-            chinese_label = st.selectbox("选择中文音色", list(chinese_voices.keys()), index=0, key="chinese_voice")
-            chinese_voice = chinese_voices[chinese_label]
-
-        col_speed, col_pause = st.columns(2)
-        with col_speed:
-            tts_speed = st.slider("语速调节", 0.5, 2.0, 1.0, 0.1, key="tts_speed")
-            st.info(f"当前语速: {tts_speed}x")
+        col_pause = st.columns(1)[0]
         with col_pause:
             pause_duration = st.slider("每组停顿时间（秒）", 0.0, 3.0, 0.5, 0.1, key="pause_duration")
 
@@ -1080,10 +999,10 @@ if df is not None:
             progress_bar = st.progress(0)
             
             with st.spinner("🎥 正在生成视频..."):
+                # 简化的语音映射
                 voice_mapping = {
-                    "英文男声": (male_english_voice, "english"),
-                    "英文女声": (female_english_voice, "english"), 
-                    "中文音色": (chinese_voice, "chinese")
+                    "英文": ("en", "english"),
+                    "中文": ("zh-CN", "chinese")
                 }
                 
                 segment_order = [segment1_type, segment2_type, segment3_type, segment4_type]
@@ -1111,14 +1030,13 @@ if df is not None:
                     'bold_text': bold_text,
                     'segment_order': segment_order,
                     'voice_mapping': voice_mapping,
-                    'tts_speed': tts_speed,
                     'tts_method': st.session_state.tts_method,
                     'eng_pho_spacing': eng_pho_spacing,
                     'pho_chn_spacing': pho_chn_spacing,
                     'line_spacing': line_spacing
                 }
                 
-                video_bytes = generate_video_with_optimization(df, settings, progress_bar, status_placeholder)
+                video_bytes = generate_video_simple(df, settings, progress_bar, status_placeholder)
                 
                 if video_bytes:
                     status_placeholder.success("✅ 视频生成完成！")
@@ -1152,15 +1070,15 @@ with st.sidebar:
     
     with st.expander("🎵 TTS 服务说明"):
         st.markdown("""
-        - **Edge TTS**: 微软在线服务，音质好但需要网络
-        - **pyttsx3**: 离线服务，稳定但音质一般
-        - **gTTS**: Google在线服务，需要网络
+        - **gTTS**: Google在线服务，需要网络连接
+        - **Edge TTS**: 微软在线服务，备用方案
+        - 如果TTS服务失败，将使用静音替代
         """)
     
     with st.expander("⚙️ 系统要求"):
         st.markdown("""
         - **FFmpeg**: 必须安装
-        - **网络**: 在线TTS服务需要联网
+        - **网络**: 需要联网使用TTS服务
         - **浏览器**: 建议使用 Chrome/Firefox
         - **数据量**: 建议每次不超过50行
         """)
@@ -1169,7 +1087,7 @@ with st.sidebar:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "🎬 旅行英语视频生成器 | 多TTS服务支持"
+    "🎬 旅行英语视频生成器 | 简化稳定版本"
     "</div>", 
     unsafe_allow_html=True
 )
