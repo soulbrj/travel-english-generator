@@ -7,3 +7,5 @@ imageio[ffmpeg]>=2.33.0
 numpy>=1.26.0
 pyttsx3>=2.90
 edge-tts>=6.1.0
+pydub>=0.25.1
+python-magic>=0.4.27
