@@ -14,6 +14,7 @@ import subprocess
 from queue import Queue
 from threading import Thread
 from typing import List, Dict, Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
 import pandas as pd
@@ -58,6 +59,11 @@ try:
     PYDUB_AVAILABLE = True
 except Exception:
     PYDUB_AVAILABLE = False
+
+# ---------- 性能优化配置 ----------
+MAX_WORKERS = min(4, os.cpu_count())  # 限制并发线程数
+BATCH_SIZE = 5  # 批量处理大小
+ENABLE_PARALLEL = True  # 启用并行处理
 
 # ---------- 跨平台 FFmpeg 检测函数 ----------
 def find_ffmpeg_path():
@@ -542,7 +548,6 @@ def create_simple_phonetic_font():
     
     try:
         # 使用系统默认字体创建一个简单的替代
-        # 这里我们只是复制系统字体作为基础
         system_fonts = []
         if sys.platform.startswith("win"):
             system_fonts = [
@@ -562,10 +567,8 @@ def create_simple_phonetic_font():
         
         for font_path in system_fonts:
             if os.path.exists(font_path):
-                # 直接使用系统字体
                 return font_path
         
-        # 如果找不到系统字体，返回None
         return None
         
     except Exception as e:
@@ -582,7 +585,6 @@ def find_font():
             r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑 - 支持中文
             r"C:\Windows\Fonts\times.ttf",     # Times New Roman - 支持音标
             r"C:\Windows\Fonts\arial.ttf",     # Arial - 支持音标
-            r"C:\Windows\Fonts\seguiemj.ttf",  # Segoe UI Emoji - 支持特殊字符
         ]
     elif sys.platform.startswith("darwin"):
         cand = [
@@ -590,7 +592,6 @@ def find_font():
             "/System/Library/Fonts/Arial Unicode.ttf",   # Arial Unicode - 支持音标和中文
             "/System/Library/Fonts/PingFang.ttf",        # 苹方 - 支持中文
             "/System/Library/Fonts/Helvetica.ttc",       # Helvetica - 支持音标
-            "/System/Library/Fonts/Times.ttc",           # Times - 支持音标
         ]
     else:
         cand = [
@@ -623,24 +624,40 @@ def find_font():
 
 DEFAULT_FONT = find_font()
 
+# 字体缓存
+_font_cache = {}
+
 def load_font(path, size):
-    """加载字体，支持中文和音标"""
+    """加载字体，支持中文和音标 - 带缓存优化"""
+    cache_key = f"{path}_{size}"
+    if cache_key in _font_cache:
+        return _font_cache[cache_key]
+    
     try:
         # 优先使用用户上传的自定义字体
         if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-            return ImageFont.truetype(st.session_state.custom_font_path, size)
-        if path and os.path.exists(path):
-            return ImageFont.truetype(path, size)
-        if DEFAULT_FONT:
-            return ImageFont.truetype(DEFAULT_FONT, size)
+            font = ImageFont.truetype(st.session_state.custom_font_path, size)
+        elif path and os.path.exists(path):
+            font = ImageFont.truetype(path, size)
+        elif DEFAULT_FONT:
+            font = ImageFont.truetype(DEFAULT_FONT, size)
+        else:
+            font = ImageFont.load_default()
+        
+        _font_cache[cache_key] = font
+        return font
     except Exception as e:
         st.warning(f"字体加载失败: {e}，使用默认字体")
-    
-    # 最终回退到默认字体
-    return ImageFont.load_default()
+        font = ImageFont.load_default()
+        _font_cache[cache_key] = font
+        return font
 
 def load_phonetic_font(size):
-    """专门加载音标字体"""
+    """专门加载音标字体 - 带缓存优化"""
+    cache_key = f"phonetic_{size}"
+    if cache_key in _font_cache:
+        return _font_cache[cache_key]
+    
     # 优先使用专门支持音标的字体
     phonetic_fonts = []
     
@@ -676,15 +693,23 @@ def load_phonetic_font(size):
     for font_path in phonetic_fonts:
         if font_path and os.path.exists(font_path):
             try:
-                return ImageFont.truetype(font_path, size)
+                font = ImageFont.truetype(font_path, size)
+                _font_cache[cache_key] = font
+                return font
             except Exception:
                 continue
     
     # 如果都失败，返回默认字体
-    return load_font(None, size)
+    font = load_font(None, size)
+    _font_cache[cache_key] = font
+    return font
 
 def load_chinese_font(size):
-    """专门加载中文字体"""
+    """专门加载中文字体 - 带缓存优化"""
+    cache_key = f"chinese_{size}"
+    if cache_key in _font_cache:
+        return _font_cache[cache_key]
+    
     chinese_fonts = []
     
     # 添加用户自定义字体
@@ -720,31 +745,30 @@ def load_chinese_font(size):
     for font_path in chinese_fonts:
         if font_path and os.path.exists(font_path):
             try:
-                return ImageFont.truetype(font_path, size)
+                font = ImageFont.truetype(font_path, size)
+                _font_cache[cache_key] = font
+                return font
             except Exception:
                 continue
     
     # 如果都失败，返回默认字体
-    return load_font(None, size)
+    font = load_font(None, size)
+    _font_cache[cache_key] = font
+    return font
 
 # ---------- 语音 / 预设库 ----------
 # 扩展音色库
 EN_MALE = [
     "en-US-GuyNeural", "en-US-BenjaminNeural", "en-GB-RyanNeural",
     "en-US-BrianNeural", "en-AU-WilliamNeural", "en-CA-LiamNeural",
-    "en-GB-AlfieNeural", "en-GB-ThomasNeural", "en-IE-ConnorNeural"
 ]
 EN_FEMALE = [
     "en-US-JennyNeural", "en-US-AriaNeural", "en-GB-SoniaNeural",
     "en-US-AmberNeural", "en-US-AnaNeural", "en-AU-NatashaNeural",
-    "en-CA-ClaraNeural", "en-GB-LibbyNeural", "en-GB-MaisieNeural",
-    "en-IE-EmilyNeural", "en-NZ-MollyNeural"
 ]
 ZH_VOICES = [
     "zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "zh-CN-KangkangNeural",
     "zh-CN-YunxiaNeural", "zh-CN-YunyangNeural", "zh-CN-XiaoyiNeural",
-    "zh-CN-XiaochenNeural", "zh-HK-HiuMaanNeural", "zh-HK-WanLungNeural",
-    "zh-TW-HsiaoChenNeural", "zh-TW-YunJheNeural"
 ]
 
 # 音色风格描述
@@ -756,11 +780,6 @@ VOICE_STYLES = {
     "en-US-AmberNeural": "美式英语，柔和甜美",
     "en-US-AnaNeural": "美式英语，年轻活泼",
     "en-AU-NatashaNeural": "澳式英语，清新明亮",
-    "en-CA-ClaraNeural": "加拿大英语，温和流畅",
-    "en-GB-LibbyNeural": "英式英语，活泼生动",
-    "en-GB-MaisieNeural": "英式英语，年轻活力",
-    "en-IE-EmilyNeural": "爱尔兰英语，优雅动听",
-    "en-NZ-MollyNeural": "新西兰英语，清新自然",
     
     # 英文男声风格
     "en-US-GuyNeural": "美式英语，沉稳专业",
@@ -769,9 +788,6 @@ VOICE_STYLES = {
     "en-US-BrianNeural": "美式英语，清晰有力",
     "en-AU-WilliamNeural": "澳式英语，阳刚自信",
     "en-CA-LiamNeural": "加拿大英语，温和稳重",
-    "en-GB-AlfieNeural": "英式英语，深沉磁性",
-    "en-GB-ThomasNeural": "英式英语，标准清晰",
-    "en-IE-ConnorNeural": "爱尔兰英语，独特魅力",
     
     # 中文音色风格
     "zh-CN-XiaoxiaoNeural": "普通话，甜美少女音",
@@ -780,11 +796,6 @@ VOICE_STYLES = {
     "zh-CN-YunxiaNeural": "普通话，温柔女声",
     "zh-CN-YunyangNeural": "普通话，专业播音",
     "zh-CN-XiaoyiNeural": "普通话，活泼少女",
-    "zh-CN-XiaochenNeural": "普通话，亲切女声",
-    "zh-HK-HiuMaanNeural": "粤语，温柔女声",
-    "zh-HK-WanLungNeural": "粤语，沉稳男声", 
-    "zh-TW-HsiaoChenNeural": "台湾国语，甜美女声",
-    "zh-TW-YunJheNeural": "台湾国语，阳光男声"
 }
 
 VOICE_LIBRARY = {
@@ -915,6 +926,41 @@ def generate_tts_cached(text: str, voice_category: Optional[str], voice_choice: 
     safe_remove(tmpmp3)
     return False
 
+# ---------- 批量 TTS 生成 ----------
+def generate_tts_batch(texts_with_configs, progress_callback=None):
+    """批量生成TTS音频 - 并行处理优化"""
+    results = []
+    
+    if not ENABLE_PARALLEL or len(texts_with_configs) <= 2:
+        # 小批量时使用串行处理
+        for i, config in enumerate(texts_with_configs):
+            success = generate_tts_cached(**config)
+            results.append(success)
+            if progress_callback:
+                progress_callback((i + 1) / len(texts_with_configs))
+        return results
+    
+    # 大批量时使用并行处理
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_config = {
+            executor.submit(generate_tts_cached, **config): config 
+            for config in texts_with_configs
+        }
+        
+        completed = 0
+        for future in as_completed(future_to_config):
+            try:
+                success = future.result()
+                results.append(success)
+            except Exception as e:
+                results.append(False)
+            
+            completed += 1
+            if progress_callback:
+                progress_callback(completed / len(texts_with_configs))
+    
+    return results
+
 # ---------- 基本音频处理 ----------
 def create_silent_mp3(out_path: str, duration_s: float) -> bool:
     """创建一段静音 mp3"""
@@ -956,7 +1002,7 @@ def concat_audios_ffmpeg(audio_paths: List[str], out_mp3: str) -> None:
 
 # ---------- 预览音频生成函数 ----------
 def generate_preview_audio(df, row_index, audio_segments):
-    """生成预览音频"""
+    """生成预览音频 - 优化版本"""
     if df is None or row_index >= len(df):
         return None
     
@@ -996,9 +1042,6 @@ def generate_preview_audio(df, row_index, audio_segments):
     except Exception as e:
         st.error(f"预览音频生成失败: {e}")
         return None
-    finally:
-        # 注意：这里不删除临时目录，因为音频文件还需要使用
-        pass
 
 # ---------- 音色样本库 ----------
 def ensure_sample_voice(voice_name: str, sample_text: str = "Hello, this is a sample.") -> Optional[str]:
@@ -1251,7 +1294,7 @@ with tab_voice_settings:
 
 # ---------- Frame rendering ----------
 def render_frame(en, ph, cn, conf, size=(1280,720)):
-    """渲染单帧图像 - 专门修复音标和中文显示问题"""
+    """渲染单帧图像 - 优化版本"""
     W,H = size
     
     try:
@@ -1273,11 +1316,11 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         draw = ImageDraw.Draw(base)
 
-        # 加载字体 - 专门为中文使用不同的字体加载函数
+        # 加载字体 - 使用缓存优化版本
         font_en = load_font(None, conf.get("english_size", 60))
-        font_cn = load_chinese_font(conf.get("chinese_size", 50))  # 使用专门的中文字体加载函数
+        font_cn = load_chinese_font(conf.get("chinese_size", 50))
         
-        # 为音标专门处理字体 - 使用专门的音标字体加载函数
+        # 为音标专门处理字体
         phonetic_size = conf.get("phonetic_size", 40)
         phonetic_font = load_phonetic_font(phonetic_size)
 
@@ -1608,7 +1651,7 @@ else:
 
 # ---------- 获取音频时长 ----------
 def get_audio_duration(audio_path: str) -> float:
-    """获取音频文件的时长（秒）"""
+    """获取音频文件的时长（秒）- 优化版本"""
     try:
         if PYDUB_AVAILABLE:
             audio = AudioSegment.from_file(audio_path)
@@ -1626,6 +1669,35 @@ def get_audio_duration(audio_path: str) -> float:
         # 如果无法获取时长，返回默认值
         return 3.0
 
+# ---------- 批量帧渲染 ----------
+def render_frames_batch(df_rows, style_conf, size=(1280,720)):
+    """批量渲染帧 - 并行优化"""
+    frames = []
+    
+    if not ENABLE_PARALLEL or len(df_rows) <= 3:
+        # 小批量时使用串行处理
+        for row in df_rows:
+            en = str(row.get("英语",""))
+            ph = str(row.get("音标",""))
+            cn = str(row.get("中文",""))
+            frame = render_frame(en, ph, cn, style_conf, size)
+            frames.append(frame)
+        return frames
+    
+    # 大批量时使用并行处理
+    def render_single_frame(args):
+        row, conf, sz = args
+        en = str(row.get("英语",""))
+        ph = str(row.get("音标",""))
+        cn = str(row.get("中文",""))
+        return render_frame(en, ph, cn, conf, sz)
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        args_list = [(row, style_conf, size) for row in df_rows]
+        frames = list(executor.map(render_single_frame, args_list))
+    
+    return frames
+
 # ---------- 合成视频 ----------
 def merge_video_audio(video_path, audio_path, out_path):
     if not ffmpeg_available():
@@ -1636,8 +1708,8 @@ def merge_video_audio(video_path, audio_path, out_path):
     ]
     run_ffmpeg_command(cmd)
 
-def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, progress_cb=None):
-    """整合生成流程 - 修复版本"""
+def generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, video_params, progress_cb=None):
+    """整合生成流程 - 优化版本"""
     tmpdir = tempfile.mkdtemp(prefix="gen_")
     try:
         W,H = video_params.get("resolution",(1280,720))
@@ -1648,25 +1720,43 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
         total_steps = len(rows) * len(audio_segments) + 2  # +2 用于音频合并和视频合成
         step = 0
         
-        for rid in rows:
-            row = df.iloc[rid]
-            en = str(row.get("英语",""))
-            ph = str(row.get("音标",""))
-            cn = str(row.get("中文",""))
-            
-            # 渲染当前单词的画面
-            img = render_frame(en, ph, cn, style_conf, (W,H))
-            
+        # 批量渲染所有帧
+        df_rows = [df.iloc[rid] for rid in rows]
+        frames = render_frames_batch(df_rows, style_conf, (W,H))
+        
+        for rid, row in zip(rows, df_rows):
             # 音频生成
             seg_paths = []
             total_audio_duration = 0
             
+            # 准备批量TTS配置
+            tts_configs = []
             for seg_idx, seg in enumerate(audio_segments):
-                text = en if seg["content"]=="英语" else (ph if seg["content"]=="音标" else cn)
+                text = row.get("英语","") if seg["content"]=="英语" else (row.get("音标","") if seg["content"]=="音标" else row.get("中文",""))
                 out_mp3 = os.path.join(tmpdir, f"{rid}_{seg_idx}_{seg['content']}.mp3")
                 
-                ok = generate_tts_cached(text, seg["voice_category"], seg["voice_choice"], seg["speed"], "在线优先", out_mp3)
-                if ok and os.path.exists(out_mp3):
+                tts_configs.append({
+                    "text": str(text),
+                    "voice_category": seg["voice_category"],
+                    "voice_choice": seg["voice_choice"],
+                    "speed": seg["speed"],
+                    "engine_pref": "在线优先",
+                    "out_mp3": out_mp3
+                })
+            
+            # 批量生成TTS
+            def tts_progress(p):
+                nonlocal step
+                if progress_cb:
+                    progress_cb((step + p * len(audio_segments)) / total_steps)
+            
+            tts_results = generate_tts_batch(tts_configs, tts_progress)
+            
+            # 处理TTS结果
+            for seg_idx, (seg, tts_success) in enumerate(zip(audio_segments, tts_results)):
+                out_mp3 = os.path.join(tmpdir, f"{rid}_{seg_idx}_{seg['content']}.mp3")
+                
+                if tts_success and os.path.exists(out_mp3):
                     # 获取实际音频时长
                     audio_duration = get_audio_duration(out_mp3)
                     total_audio_duration += audio_duration
@@ -1686,8 +1776,6 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
                     seg_paths.append(pause_path)
                 
                 step += 1
-                if progress_cb:
-                    progress_cb(step/total_steps)
 
             # 合并当前行的音频
             if seg_paths:
@@ -1698,18 +1786,21 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
                     
                     # 根据音频时长生成对应数量的帧
                     frames_this_word = int(total_audio_duration * fps)
+                    frame_img = frames[rows.index(rid)]  # 使用预渲染的帧
+                    
                     for i in range(frames_this_word):
                         fname = os.path.join(tmpdir, f"{rid}_{i:04d}.png")
-                        img.save(fname)
+                        frame_img.save(fname)
                         frame_files.append(fname)
                         
                 except Exception as e:
                     st.error(f"音频合并失败: {e}")
                     # 使用默认帧数作为备选
                     frames_this_word = int(3.0 * fps)  # 默认3秒
+                    frame_img = frames[rows.index(rid)]
                     for i in range(frames_this_word):
                         fname = os.path.join(tmpdir, f"{rid}_{i:04d}.png")
-                        img.save(fname)
+                        frame_img.save(fname)
                         frame_files.append(fname)
 
         # 检查是否有足够的帧
@@ -1839,8 +1930,23 @@ if uploaded is not None and df is not None:
         default=default_rows
     )
     
+    # 性能选项
+    st.markdown("### ⚡ 性能选项")
+    col1, col2 = st.columns(2)
+    with col1:
+        enable_parallel = st.checkbox("启用并行处理", value=ENABLE_PARALLEL, 
+                                    help="启用多线程处理以加速生成")
+    with col2:
+        max_workers_setting = st.slider("最大并发线程数", 1, 8, MAX_WORKERS, 
+                                       help="根据您的CPU核心数调整")
+    
     if rows:
         if st.button("▶️ 开始生成视频", width='stretch', disabled=not ffmpeg_available()):
+            # 更新性能设置
+            global ENABLE_PARALLEL, MAX_WORKERS
+            ENABLE_PARALLEL = enable_parallel
+            MAX_WORKERS = max_workers_setting
+            
             # 预检查
             if not ffmpeg_available():
                 st.error("FFmpeg 不可用，无法生成视频")
@@ -1865,7 +1971,8 @@ if uploaded is not None and df is not None:
             status.text("生成中...")
             
             try:
-                outp = generate_video_pipeline(df, rows, style_conf, audio_segments, params, progress_cb=cb)
+                # 使用优化版本的视频生成管道
+                outp = generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, params, progress_cb=cb)
                 
                 if outp and os.path.exists(outp):
                     st.success("✅ 视频生成完成")
