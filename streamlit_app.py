@@ -24,10 +24,14 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageColor
 import imageio.v2 as imageio
 
 # ---------- 配置 & 常量 ----------
-LIGHTWEIGHT_MODE = True  # 启用轻量模式，减少依赖
+LIGHTWEIGHT_MODE = False  # True -> 更轻量, 禁用队列/模板/进度
 
 # 兼容 Streamlit Cloud 的临时目录处理
-APP_TMP = os.path.join(tempfile.gettempdir(), "english_video_app")
+if 'STREAMLIT_SHARING_MODE' in os.environ or 'STREAMLIT_SERVER_HEADLESS' in os.environ:
+    APP_TMP = os.path.join(tempfile.gettempdir(), "travel_english_tts_app")
+else:
+    APP_TMP = os.path.join(tempfile.gettempdir(), "travel_english_tts_app")
+
 CACHE_DIR = os.path.join(APP_TMP, "cache")
 SAMPLES_DIR = os.path.join(APP_TMP, "samples")
 TEMPLATE_DIR = os.path.join(APP_TMP, "templates")
@@ -55,14 +59,69 @@ try:
 except Exception:
     PYDUB_AVAILABLE = False
 
-# ---------- 简化版 FFmpeg 检测 ----------
-def ffmpeg_available() -> bool:
-    """简化版FFmpeg检测，不强制依赖"""
+# ---------- 跨平台 FFmpeg 检测函数 ----------
+def find_ffmpeg_path():
+    """跨平台查找 ffmpeg 路径"""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return ffmpeg_path
+    
+    possible_paths = []
+    if sys.platform.startswith("win"):
+        possible_paths = [
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        ]
+    elif sys.platform.startswith("darwin"):
+        possible_paths = [
+            "/usr/local/bin/ffmpeg",
+            "/opt/homebrew/bin/ffmpeg",
+        ]
+    else:
+        possible_paths = [
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+        ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    
     try:
-        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
-        return result.returncode == 0
-    except:
-        return False
+        import imageio_ffmpeg as iioff
+        ffexe = iioff.get_ffmpeg_exe()
+        if ffexe and os.path.exists(ffexe):
+            return ffexe
+    except Exception:
+        pass
+    
+    return None
+
+def ffmpeg_available() -> bool:
+    return find_ffmpeg_path() is not None
+
+def run_ffmpeg_command(cmd):
+    """跨平台运行 ffmpeg 命令"""
+    ffmpeg_path = find_ffmpeg_path()
+    if not ffmpeg_path:
+        raise RuntimeError("FFmpeg not found")
+    
+    if cmd[0] == "ffmpeg":
+        cmd[0] = ffmpeg_path
+    
+    env = os.environ.copy()
+    
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                              timeout=300, check=True, env=env)
+        return True
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("FFmpeg command timed out")
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        raise RuntimeError(f"FFmpeg command failed: {error_msg}")
+    except Exception as e:
+        raise RuntimeError(f"FFmpeg execution error: {str(e)}")
 
 # ---------- 高级UI theme & CSS ----------
 PRIMARY_LIGHT = "#f8faff"
@@ -80,15 +139,15 @@ TEXT_MUTED = "#64748b"
 BORDER_COLOR = "rgba(99, 102, 241, 0.2)"
 
 st.set_page_config(
-    page_title="🎬 英语学习视频生成器",
+    page_title="🎬 英语视频生成器 - 专业级多音色教学视频制作平台",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+IPA:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Charis+SIL:wght@400;700&display=swap');
 
 :root {{
   --primary-light: {PRIMARY_LIGHT};
@@ -103,10 +162,6 @@ st.markdown(f"""
   --border-color: {BORDER_COLOR};
 }}
 
-* {{
-    font-family: 'Noto Sans SC', sans-serif !important;
-}}
-
 .stApp {{
   background: linear-gradient(135deg, {PRIMARY_LIGHT} 0%, {SECONDARY_LIGHT} 100%) !important;
   color: {TEXT_DARK} !important;
@@ -115,72 +170,214 @@ st.markdown(f"""
 .main-title {{
   background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
   color: white;
-  padding: 20px;
-  border-radius: 16px;
-  font-size: 24px;
-  font-weight: 700;
+  padding: 24px 32px;
+  border-radius: 20px;
+  font-size: 28px;
+  font-weight: 800;
   text-align: center;
-  margin-bottom: 20px;
-  box-shadow: 0 8px 25px rgba(99, 102, 241, 0.2);
+  margin-bottom: 24px;
+  box-shadow: 0 12px 40px rgba(99, 102, 241, 0.25);
+}}
+
+.navbar {{
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  padding: 16px 0;
+  margin-bottom: 32px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+}}
+
+.nav-btn {{
+  padding: 12px 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: {TEXT_DARK};
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.3s ease;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}}
+
+.nav-btn:hover {{
+  background: white;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.2);
+  border-color: var(--accent-primary);
 }}
 
 .card {{
   background: var(--card-bg);
-  border-radius: 16px;
-  padding: 20px;
-  margin-bottom: 16px;
+  border-radius: 20px;
+  padding: 24px;
+  margin-bottom: 20px;
   border: 1px solid var(--border-color);
-  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.1);
+  box-shadow: 0 8px 32px rgba(99, 102, 241, 0.1);
+  transition: all 0.3s ease;
+}}
+
+.card:hover {{
+  box-shadow: 0 12px 40px rgba(99, 102, 241, 0.15);
+  transform: translateY(-2px);
 }}
 
 .card-header {{
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   color: {TEXT_DARK};
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 2px solid var(--border-color);
 }}
 
 div.stButton > button {{
   background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
   color: white;
-  border-radius: 10px;
-  padding: 10px 20px;
+  border-radius: 12px;
+  padding: 12px 24px;
   font-weight: 600;
   border: none;
   transition: all 0.3s ease;
-  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
   font-size: 14px;
 }}
 
 div.stButton > button:hover {{
-  transform: translateY(-1px);
-  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(99, 102, 241, 0.4);
+  background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
+}}
+
+.footer {{
+  text-align: center;
+  padding: 24px;
+  color: {TEXT_MUTED};
+  margin-top: 40px;
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+}}
+
+.voice-library {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+  max-height: 500px;
+  overflow-y: auto;
+  padding: 10px;
+}}
+
+.voice-card {{
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  transition: all 0.3s ease;
+}}
+
+.voice-card:hover {{
+  border-color: var(--accent-primary);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(99, 102, 241, 0.15);
+  background: white;
+}}
+
+.voice-name {{
+  font-weight: 700;
+  color: {TEXT_DARK};
+  margin-bottom: 8px;
+  font-size: 16px;
+}}
+
+.voice-category {{
+  font-size: 13px;
+  color: {TEXT_MUTED};
+  margin-bottom: 8px;
+  font-weight: 500;
+}}
+
+.voice-style {{
+  font-size: 12px;
+  color: {SUCCESS_COLOR};
+  margin-bottom: 12px;
+  font-weight: 500;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-block;
+}}
+
+.stProgress > div > div > div {{
+  background: linear-gradient(90deg, var(--gradient-start), var(--gradient-end));
+  border-radius: 8px;
+}}
+
+/* 自定义Tabs样式 */
+.stTabs {{
+  margin-top: 16px;
+}}
+
+.stTabs > div > div > div {{
+  gap: 8px;
+}}
+
+.stTabs > div > div > div > div {{
+  color: {TEXT_DARK};
+  border-radius: 12px;
+  padding: 12px 20px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.7);
+  transition: all 0.3s ease;
+  font-weight: 500;
+}}
+
+.stTabs > div > div > div > div:hover {{
+  background: rgba(255, 255, 255, 0.9);
+  border-color: var(--accent-primary);
+}}
+
+.stTabs > div > div > div > div[data-baseweb="tab"][aria-selected="true"] {{
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  color: white;
+  border-color: transparent;
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+  font-weight: 600;
+}}
+
+.stAudio {{
+  margin: 12px 0;
+  border-radius: 12px;
+  overflow: hidden;
 }}
 
 .stSuccess {{
   background: rgba(16, 185, 129, 0.1);
   border: 1px solid rgba(16, 185, 129, 0.3);
-  border-radius: 10px;
-  padding: 16px;
+  border-radius: 12px;
+}}
+
+.stError {{
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 12px;
 }}
 
 .stInfo {{
   background: rgba(99, 102, 241, 0.1);
   border: 1px solid rgba(99, 102, 241, 0.3);
-  border-radius: 10px;
-  padding: 16px;
-}}
-
-.stWarning {{
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-  border-radius: 10px;
-  padding: 16px;
+  border-radius: 12px;
 }}
 
 /* 可滚动内容区域 */
@@ -204,13 +401,50 @@ div.stButton > button:hover {{
   border-radius: 3px;
 }}
 
+.scrollable-content::-webkit-scrollbar-thumb:hover {{
+  background: var(--accent-secondary);
+}}
+
+/* 紧凑表格样式 */
+.compact-table {{
+  font-size: 14px;
+}}
+
+.compact-table .dataframe {{
+  width: 100%;
+}}
+
+.compact-table .dataframe th {{
+  background: rgba(99, 102, 241, 0.1);
+  padding: 8px 12px;
+}}
+
+.compact-table .dataframe td {{
+  padding: 6px 12px;
+}}
+
+/* 预览区域样式 */
+.preview-container {{
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.5);
+  margin: 16px 0;
+}}
+
+.preview-image {{
+  max-width: 100%;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}}
+
 /* 实时预览区域 */
 .live-preview-container {{
-  background: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.9);
   border-radius: 16px;
   padding: 20px;
   border: 2px solid var(--border-color);
-  box-shadow: 0 8px 25px rgba(99, 102, 241, 0.1);
+  box-shadow: 0 8px 32px rgba(99, 102, 241, 0.1);
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -228,37 +462,35 @@ div.stButton > button:hover {{
 
 .live-preview-image {{
   max-width: 100%;
-  max-height: 300px;
+  max-height: 400px;
   border-radius: 12px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
   margin-bottom: 20px;
 }}
 
 .live-preview-text {{
   text-align: center;
-  margin: 8px 0;
+  margin: 10px 0;
   font-size: 16px;
 }}
 
 .live-preview-english {{
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
   color: {TEXT_DARK};
-  font-family: 'Arial', sans-serif;
 }}
 
 .live-preview-phonetic {{
-  font-size: 16px;
+  font-size: 18px;
   color: {TEXT_MUTED};
   font-style: italic;
-  font-family: 'Noto Sans IPA', 'Arial Unicode MS', sans-serif;
+  font-family: 'Noto Sans IPA', 'Charis SIL', 'Arial Unicode MS', 'Lucida Sans Unicode', 'DejaVu Sans', sans-serif;
   font-weight: 400;
 }}
 
 .live-preview-chinese {{
-  font-size: 18px;
+  font-size: 20px;
   color: {TEXT_DARK};
-  font-family: 'Noto Sans SC', sans-serif;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -297,69 +529,216 @@ def cache_store(src: str, key: str):
     except Exception:
         pass
 
-# ---------- 字体处理 ----------
-def get_default_font():
-    """获取默认字体，优先使用Google Fonts"""
-    return None  # 使用CSS中定义的字体
-
-def load_font(size, font_path=None):
-    """加载字体"""
+# ---------- 字体检测与加载 ----------
+def create_simple_phonetic_font():
+    """创建一个简单的音标字体替代方案"""
+    phonetic_font_path = os.path.join(tempfile.gettempdir(), "simple_phonetic.ttf")
+    
+    # 如果已经存在，直接返回
+    if os.path.exists(phonetic_font_path):
+        return phonetic_font_path
+    
     try:
-        # 优先使用系统字体
-        system_fonts = [
-            "NotoSansSC-Regular.ttf", "Arial.ttf", "simhei.ttf", "msyh.ttc"
-        ]
+        # 使用系统默认字体创建一个简单的替代
+        # 这里我们只是复制系统字体作为基础
+        system_fonts = []
+        if sys.platform.startswith("win"):
+            system_fonts = [
+                r"C:\Windows\Fonts\arial.ttf",
+                r"C:\Windows\Fonts\times.ttf",
+            ]
+        elif sys.platform.startswith("darwin"):
+            system_fonts = [
+                "/System/Library/Fonts/Arial.ttf",
+                "/System/Library/Fonts/Times.ttf",
+            ]
+        else:
+            system_fonts = [
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ]
         
-        for font_name in system_fonts:
-            try:
-                return ImageFont.truetype(font_name, size)
-            except:
-                continue
-                
-        # 使用默认字体
-        return ImageFont.load_default()
+        for font_path in system_fonts:
+            if os.path.exists(font_path):
+                # 直接使用系统字体
+                return font_path
+        
+        # 如果找不到系统字体，返回None
+        return None
+        
     except Exception as e:
-        return ImageFont.load_default()
+        return None
+
+def find_font():
+    """跨平台查找支持中文和音标的字体"""
+    cand = []
+    
+    # 优先寻找支持音标和中文的字体
+    if sys.platform.startswith("win"):
+        cand = [
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS - 支持音标和中文
+            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑 - 支持中文
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman - 支持音标
+            r"C:\Windows\Fonts\arial.ttf",     # Arial - 支持音标
+            r"C:\Windows\Fonts\seguiemj.ttf",  # Segoe UI Emoji - 支持特殊字符
+        ]
+    elif sys.platform.startswith("darwin"):
+        cand = [
+            "/System/Library/Fonts/Arial.ttf",           # Arial - 支持音标
+            "/System/Library/Fonts/Arial Unicode.ttf",   # Arial Unicode - 支持音标和中文
+            "/System/Library/Fonts/PingFang.ttf",        # 苹方 - 支持中文
+            "/System/Library/Fonts/Helvetica.ttc",       # Helvetica - 支持音标
+            "/System/Library/Fonts/Times.ttc",           # Times - 支持音标
+        ]
+    else:
+        cand = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      # DejaVu Sans - 支持音标
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", # Liberation Sans - 支持音标
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",       # 文泉驿微米黑 - 支持中文
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", # Noto Sans CJK - 支持中文和音标
+        ]
+    
+    for p in cand:
+        if os.path.exists(p):
+            try:
+                # 测试字体是否支持音标字符
+                test_font = ImageFont.truetype(p, 12)
+                return p
+            except Exception:
+                continue
+    
+    # 如果找不到合适的字体，创建一个简单的替代
+    simple_font = create_simple_phonetic_font()
+    if simple_font:
+        return simple_font
+    
+    # 如果还是找不到，返回第一个存在的字体
+    for p in cand:
+        if os.path.exists(p):
+            return p
+    
+    return None
+
+DEFAULT_FONT = find_font()
+
+def load_font(path, size):
+    """加载字体，支持中文和音标"""
+    try:
+        # 优先使用用户上传的自定义字体
+        if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+            return ImageFont.truetype(st.session_state.custom_font_path, size)
+        if path and os.path.exists(path):
+            return ImageFont.truetype(path, size)
+        if DEFAULT_FONT:
+            return ImageFont.truetype(DEFAULT_FONT, size)
+    except Exception as e:
+        st.warning(f"字体加载失败: {e}，使用默认字体")
+    
+    # 最终回退到默认字体
+    return ImageFont.load_default()
 
 def load_phonetic_font(size):
-    """加载音标字体"""
-    try:
-        # 尝试加载音标专用字体
-        phonetic_fonts = [
-            "NotoSansIPA-Regular.ttf", "Arial.ttf", "Times.ttf"
-        ]
-        
-        for font_name in phonetic_fonts:
+    """专门加载音标字体"""
+    # 优先使用专门支持音标的字体
+    phonetic_fonts = []
+    
+    # 添加用户自定义字体
+    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+        phonetic_fonts.append(st.session_state.custom_font_path)
+    
+    # 添加专门支持音标的字体
+    if sys.platform.startswith("win"):
+        phonetic_fonts.extend([
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman
+            r"C:\Windows\Fonts\arial.ttf",     # Arial
+        ])
+    elif sys.platform.startswith("darwin"):
+        phonetic_fonts.extend([
+            "/System/Library/Fonts/Arial Unicode.ttf",
+            "/System/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Times.ttc",
+        ])
+    else:
+        phonetic_fonts.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+        ])
+    
+    # 添加默认字体
+    if DEFAULT_FONT:
+        phonetic_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in phonetic_fonts:
+        if font_path and os.path.exists(font_path):
             try:
-                return ImageFont.truetype(font_name, size)
-            except:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
                 continue
-                
-        return load_font(size)
-    except:
-        return load_font(size)
+    
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
 
 # ---------- 语音 / 预设库 ----------
+# 扩展音色库
 EN_MALE = [
     "en-US-GuyNeural", "en-US-BenjaminNeural", "en-GB-RyanNeural",
+    "en-US-BrianNeural", "en-AU-WilliamNeural", "en-CA-LiamNeural",
+    "en-GB-AlfieNeural", "en-GB-ThomasNeural", "en-IE-ConnorNeural"
 ]
 EN_FEMALE = [
     "en-US-JennyNeural", "en-US-AriaNeural", "en-GB-SoniaNeural",
+    "en-US-AmberNeural", "en-US-AnaNeural", "en-AU-NatashaNeural",
+    "en-CA-ClaraNeural", "en-GB-LibbyNeural", "en-GB-MaisieNeural",
+    "en-IE-EmilyNeural", "en-NZ-MollyNeural"
 ]
 ZH_VOICES = [
-    "zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "zh-CN-XiaoyiNeural",
+    "zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "zh-CN-KangkangNeural",
+    "zh-CN-YunxiaNeural", "zh-CN-YunyangNeural", "zh-CN-XiaoyiNeural",
+    "zh-CN-XiaochenNeural", "zh-HK-HiuMaanNeural", "zh-HK-WanLungNeural",
+    "zh-TW-HsiaoChenNeural", "zh-TW-YunJheNeural"
 ]
 
+# 音色风格描述
 VOICE_STYLES = {
+    # 英文女声风格
     "en-US-JennyNeural": "美式英语，清晰自然",
     "en-US-AriaNeural": "美式英语，温暖亲切", 
     "en-GB-SoniaNeural": "英式英语，优雅知性",
+    "en-US-AmberNeural": "美式英语，柔和甜美",
+    "en-US-AnaNeural": "美式英语，年轻活泼",
+    "en-AU-NatashaNeural": "澳式英语，清新明亮",
+    "en-CA-ClaraNeural": "加拿大英语，温和流畅",
+    "en-GB-LibbyNeural": "英式英语，活泼生动",
+    "en-GB-MaisieNeural": "英式英语，年轻活力",
+    "en-IE-EmilyNeural": "爱尔兰英语，优雅动听",
+    "en-NZ-MollyNeural": "新西兰英语，清新自然",
+    
+    # 英文男声风格
     "en-US-GuyNeural": "美式英语，沉稳专业",
     "en-US-BenjaminNeural": "美式英语，温暖可靠",
     "en-GB-RyanNeural": "英式英语，标准优雅",
+    "en-US-BrianNeural": "美式英语，清晰有力",
+    "en-AU-WilliamNeural": "澳式英语，阳刚自信",
+    "en-CA-LiamNeural": "加拿大英语，温和稳重",
+    "en-GB-AlfieNeural": "英式英语，深沉磁性",
+    "en-GB-ThomasNeural": "英式英语，标准清晰",
+    "en-IE-ConnorNeural": "爱尔兰英语，独特魅力",
+    
+    # 中文音色风格
     "zh-CN-XiaoxiaoNeural": "普通话，甜美少女音",
     "zh-CN-YunxiNeural": "普通话，温暖青年音",
+    "zh-CN-KangkangNeural": "普通话，沉稳男声",
+    "zh-CN-YunxiaNeural": "普通话，温柔女声",
+    "zh-CN-YunyangNeural": "普通话，专业播音",
     "zh-CN-XiaoyiNeural": "普通话，活泼少女",
+    "zh-CN-XiaochenNeural": "普通话，亲切女声",
+    "zh-HK-HiuMaanNeural": "粤语，温柔女声",
+    "zh-HK-WanLungNeural": "粤语，沉稳男声", 
+    "zh-TW-HsiaoChenNeural": "台湾国语，甜美女声",
+    "zh-TW-YunJheNeural": "台湾国语，阳光男声"
 }
 
 VOICE_LIBRARY = {
@@ -369,19 +748,9 @@ VOICE_LIBRARY = {
 }
 
 PRESET_MODES = {
-    "基础学习模式": [
-        {"content":"英语","category":"英文女声","speed":1.0,"pause":0.3},
-        {"content":"音标","category":"英文女声","speed":1.0,"pause":0.2}
-    ],
-    "强化记忆模式": [
-        {"content":"英语","category":"英文男声","speed":0.95,"pause":0.5},
-        {"content":"中文","category":"中文音色","speed":1.0,"pause":0.8},
-        {"content":"英语","category":"英文女声","speed":1.05,"pause":0.3}
-    ],
-    "理解优先模式": [
-        {"content":"中文","category":"中文音色","speed":1.0,"pause":0.5},
-        {"content":"英语","category":"英文女声","speed":0.95,"pause":0.2}
-    ]
+    "基础学习模式": [{"content":"英语","category":"英文女声","speed":1.0,"pause":0.3},{"content":"音标","category":"英文女声","speed":1.0,"pause":0.2}],
+    "强化记忆模式": [{"content":"英语","category":"英文男声","speed":0.95,"pause":0.5},{"content":"中文","category":"中文音色","speed":1.0,"pause":0.8},{"content":"英语","category":"英文女声","speed":1.05,"pause":0.3}],
+    "理解优先模式": [{"content":"中文","category":"中文音色","speed":1.0,"pause":0.5},{"content":"英语","category":"英文女声","speed":0.95,"pause":0.2}]
 }
 
 def recommend_preset(goal: str) -> str:
@@ -404,6 +773,32 @@ def get_voice_display_name(voice_name: str) -> str:
 def get_voice_style(voice_name: str) -> str:
     """获取音色风格描述"""
     return VOICE_STYLES.get(voice_name, "专业语音合成")
+
+# ---------- 模板 / 进度 存取 ----------
+def save_template(name, style_conf, audio_segments, video_params):
+    ensure_dir(TEMPLATE_DIR)
+    p = os.path.join(TEMPLATE_DIR, f"{name}.json")
+    json.dump({"style":style_conf,"audio":audio_segments,"video":video_params}, open(p,"w",encoding="utf-8"), ensure_ascii=False, indent=2)
+
+def load_templates():
+    ensure_dir(TEMPLATE_DIR)
+    out=[]
+    for f in os.listdir(TEMPLATE_DIR):
+        if f.endswith(".json"):
+            try:
+                out.append((f[:-5], json.load(open(os.path.join(TEMPLATE_DIR,f),"r",encoding="utf-8"))))
+            except:
+                pass
+    return out
+
+def load_progress():
+    try:
+        return json.load(open(PROGRESS_FILE,"r",encoding="utf-8"))
+    except:
+        return {}
+
+def save_progress(data):
+    json.dump(data, open(PROGRESS_FILE,"w",encoding="utf-8"), ensure_ascii=False, indent=2)
 
 # ---------- TTS 辅助函数 ----------
 def generate_edge_mp3(text: str, voice: str, speed: float, out_mp3: str) -> bool:
@@ -474,19 +869,44 @@ def generate_tts_cached(text: str, voice_category: Optional[str], voice_choice: 
     safe_remove(tmpmp3)
     return False
 
-# ---------- 简化版音频处理 ----------
-def create_silent_audio(duration_s: float) -> bytes:
-    """创建静音音频数据"""
-    # 返回空的音频数据
-    return b""
+# ---------- 基本音频处理 ----------
+def create_silent_mp3(out_path: str, duration_s: float) -> bool:
+    """创建一段静音 mp3"""
+    try:
+        if ffmpeg_available():
+            cmd = ["ffmpeg","-y","-f","lavfi","-i",f"anullsrc=r=44100:cl=mono","-t",str(duration_s), out_path]
+            run_ffmpeg_command(cmd)
+            return os.path.exists(out_path)
+    except Exception as e:
+        pass
+    
+    # 备用方案
+    try:
+        with open(out_path, "wb") as f: 
+            f.write(b"")
+        return True
+    except:
+        return False
 
-def concat_audios_simple(audio_paths: List[str]) -> bytes:
-    """简化版音频合并"""
-    # 返回第一个音频文件的内容
-    if audio_paths and os.path.exists(audio_paths[0]):
-        with open(audio_paths[0], 'rb') as f:
-            return f.read()
-    return b""
+def concat_audios_ffmpeg(audio_paths: List[str], out_mp3: str) -> None:
+    """使用 ffmpeg concat 合并多个 mp3 文件"""
+    if not audio_paths:
+        raise ValueError("audio_paths empty")
+    if not ffmpeg_available():
+        raise RuntimeError("ffmpeg missing for audio concat")
+    
+    listfile = out_mp3 + "_list.txt"
+    with open(listfile, "w", encoding="utf-8") as f:
+        for p in audio_paths:
+            f.write(f"file '{os.path.abspath(p)}'\n")
+    
+    cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",listfile,"-c","copy",out_mp3]
+    run_ffmpeg_command(cmd)
+    
+    if not os.path.exists(out_mp3):
+        raise RuntimeError("Audio concat failed: output file not created")
+    
+    safe_remove(listfile)
 
 # ---------- 预览音频生成函数 ----------
 def generate_preview_audio(df, row_index, audio_segments):
@@ -510,70 +930,147 @@ def generate_preview_audio(df, row_index, audio_segments):
             ok = generate_tts_cached(text, seg["voice_category"], seg["voice_choice"], seg["speed"], "在线优先", out_mp3)
             if ok and os.path.exists(out_mp3):
                 seg_paths.append(out_mp3)
+            
+            # 添加停顿
+            if seg.get("pause",0) > 0:
+                pause_path = os.path.join(tmpdir, f"pause_{seg_idx}.mp3")
+                create_silent_mp3(pause_path, seg["pause"])
+                seg_paths.append(pause_path)
         
-        # 返回第一个音频文件作为预览
+        # 合并音频
         if seg_paths:
-            return seg_paths[0]
+            merged_audio = os.path.join(tmpdir, "preview_merged.mp3")
+            try:
+                concat_audios_ffmpeg(seg_paths, merged_audio)
+                return merged_audio
+            except Exception as e:
+                st.error(f"预览音频合并失败: {e}")
         
         return None
     except Exception as e:
         st.error(f"预览音频生成失败: {e}")
         return None
+    finally:
+        # 注意：这里不删除临时目录，因为音频文件还需要使用
+        pass
+
+# ---------- 音色样本库 ----------
+def ensure_sample_voice(voice_name: str, sample_text: str = "Hello, this is a sample.") -> Optional[str]:
+    """生成或返回缓存的音色示例 mp3 路径"""
+    key = hashlib.sha1(f"sample::{voice_name}".encode()).hexdigest()
+    out = cache_get(key)
+    if os.path.exists(out):
+        return out
+    
+    # 生成示例
+    fd, tmpmp3 = tempfile.mkstemp(suffix=".mp3")
+    os.close(fd)
+    ok = False
+    
+    if EDGE_TTS_AVAILABLE:
+        ok = generate_edge_mp3(sample_text, voice_name, 1.0, tmpmp3)
+    
+    if ok and os.path.exists(tmpmp3):
+        cache_store(tmpmp3, key)
+        safe_remove(tmpmp3)
+        return cache_get(key)
+    
+    safe_remove(tmpmp3)
+    return None
 
 # ---------- 音标字符映射表 ----------
 PHONETIC_CHAR_MAP = {
-    'ɡ': 'g',
-    'ˈ': "'",
-    'ˌ': ",",
-    'ː': ':',
+    # 修复常见音标字符显示问题
+    'ɡ': 'g',  # U+0261 拉丁文小写字母 SCRIPT G -> 普通 g
+    'ə': 'ə',  # 保持原字符，但确保字体支持
+    'θ': 'θ',  # 保持原字符
+    'ð': 'ð',  # 保持原字符
+    'ʃ': 'ʃ',  # 保持原字符
+    'ʒ': 'ʒ',  # 保持原字符
+    'ŋ': 'ŋ',  # 保持原字符
+    'ɪ': 'ɪ',  # 保持原字符
+    'ʊ': 'ʊ',  # 保持原字符
+    'ʌ': 'ʌ',  # 保持原字符
+    'ɑ': 'ɑ',  # 保持原字符
+    'ɒ': 'ɒ',  # 保持原字符
+    'ɔ': 'ɔ',  # 保持原字符
+    'ɜ': 'ɜ',  # 保持原字符
+    'æ': 'æ',  # 保持原字符
+    'ˈ': "'",  # 重音符号 -> 单引号
+    'ˌ': ",",  # 次重音符号 -> 逗号
+    'ː': ':',  # 长音符号 -> 冒号
 }
 
 def convert_phonetic_text(text):
-    """转换音标文本"""
+    """转换音标文本，最小化字符转换"""
     if not text:
         return ""
     
+    # 只转换确实有问题的字符，保留所有标准音标符号
     converted = ''.join(PHONETIC_CHAR_MAP.get(char, char) for char in text)
+    
     return converted
 
 # ---------- 页面顶部 / 导航 ----------
-st.markdown(f'<div class="main-title">🎬 英语学习视频生成器</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="main-title">🎬 英语视频生成器 - 专业级多音色教学视频制作平台</div>', unsafe_allow_html=True)
+st.markdown(f"""<div class="navbar">
+  <div class="nav-btn">📁 数据管理</div>
+  <div class="nav-btn">🔊 音频设置</div>
+  <div class="nav-btn">👀 效果预览</div>
+  <div class="nav-btn">📤 生成输出</div>
+</div>""", unsafe_allow_html=True)
 
 # ---------- 数据管理部分 ----------
 st.markdown('<div class="card-header">📁 数据管理</div>', unsafe_allow_html=True)
-uploaded = st.file_uploader("上传Excel/CSV文件（需要包含英语、中文列）", type=["xlsx","xls","csv"])
+uploaded = st.file_uploader("拖拽上传 Excel/CSV/TXT（必须列名：英语、中文，音标可选）", type=["xlsx","xls","csv","txt"])
 df = None
 if uploaded:
     try:
-        if uploaded.name.lower().endswith((".csv")):
+        if uploaded.name.lower().endswith((".csv",".txt")):
             df = pd.read_csv(uploaded)
         else:
             df = pd.read_excel(uploaded)
-        
+        cols = [str(c).strip() for c in df.columns]
+        df.columns = cols
         if "英语" not in df.columns or "中文" not in df.columns:
-            st.error("文件必须包含'英语'和'中文'列")
+            st.error("必须包含列名：'英语' 和 '中文'（精确匹配）。")
             df = None
         else:
             if "音标" not in df.columns:
                 df["音标"] = ""
-            st.success(f"成功加载 {len(df)} 条数据")
-            st.dataframe(df.head(5), use_container_width=True)
+            st.success(f"解析成功，{len(df)} 行")
+            st.write("前 10 行预览：")
+            st.markdown('<div class="compact-table">', unsafe_allow_html=True)
+            st.dataframe(df.head(10), width='stretch')
+            
+            if st.button("在页面中编辑数据", width='stretch'):
+                edited = st.data_editor(df, num_rows="dynamic", width='stretch')
+                df = edited.copy()
+                st.success("已应用编辑")
     except Exception as e:
-        st.error(f"文件解析失败：{e}")
+        st.error(f"解析失败：{e}")
 else:
-    st.info("请上传包含英语和中文列的数据文件")
+    st.info("未上传数据，示例：请上传包含列 英语 / 中文（可选 音标）的文件。")
 
 # ---------- 音频设置部分 ----------
 st.markdown('<div class="card-header">🔊 音频设置</div>', unsafe_allow_html=True)
 
 # 使用选项卡组织音频设置
-tab_audio_config, tab_voice_library = st.tabs(["🎵 音频编排", "🎙️ 音色库"])
+tab_audio_config, tab_voice_library, tab_voice_settings = st.tabs(["🎵 音频编排", "🎙️ 音色样本库", "⚙️ 音色设置"])
 
 with tab_audio_config:
     st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
     
+    engine_pref = st.selectbox("引擎偏好", ["在线优先"], key="ui_engine_pref")
+    st.caption(f"系统离线可用: {PYTTSX3_AVAILABLE}；在线 edge-tts 可用: {EDGE_TTS_AVAILABLE}")
+
+    # 智能推荐 + 预设选择
+    learning_goal = st.text_input("学习目标（用于智能推荐）", value="", key="ui_learning_goal")
+    recommended = recommend_preset(learning_goal)
+    preset_choice = st.selectbox("预设播放模式", ["(自定义)"] + list(PRESET_MODES.keys()), index=1 if recommended in PRESET_MODES else 0, key="ui_preset_choice")
+
     # 音频段数
-    n_segments = st.number_input("音频段落数量", min_value=1, max_value=6, value=4, step=1, key="ui_n_segments")
+    n_segments = st.number_input("音频段数", min_value=1, max_value=12, value=4, step=1, key="ui_n_segments")
 
     # 构建段配置表
     audio_segments = []
@@ -582,40 +1079,51 @@ with tab_audio_config:
     default_segments = [
         {"content": "英语", "category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
         {"content": "英语", "category": "英文男声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
-        {"content": "中文", "category": "中文音色", "voice_choice": None, "speed": 1.0, "pause": 0.5},
+        {"content": "中文", "category": "中文音色", "voice_choice": None, "speed": 1.0, "pause": 0.3},
         {"content": "英语", "category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.3}
     ]
     
     for si in range(int(n_segments)):
-        st.markdown(f"**段落 {si+1}**", unsafe_allow_html=True)
+        st.markdown(f"**段 {si+1}**", unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns([1.5, 1.2, 1, 1])
         
         # 获取默认值
         default_seg = default_segments[si] if si < len(default_segments) else default_segments[0]
         
         with c1:
-            content = st.selectbox(f"内容", ["英语", "音标", "中文"], 
+            content = st.selectbox(f"段{si+1} 内容", ["英语", "音标", "中文"], 
                                  index=["英语", "音标", "中文"].index(default_seg["content"]), 
                                  key=f"ui_seg_content_{si}")
         with c2:
-            category = st.selectbox(f"音色类型", ["英文女声", "英文男声", "中文音色"], 
+            category = st.selectbox(f"段{si+1} 音色库", ["英文女声", "英文男声", "中文音色"], 
                                   index=["英文女声", "英文男声", "中文音色"].index(default_seg["category"]), 
                                   key=f"ui_seg_cat_{si}")
         with c3:
+            # 从音色设置中获取默认音色
+            voice_settings_key = f"default_voice_{category}"
+            default_voice = st.session_state.get(voice_settings_key, VOICE_LIBRARY.get(category, [""])[0])
+            
             presets = VOICE_LIBRARY.get(category, [])
-            voice_choice = st.selectbox(f"具体音色", ["自动选择"] + presets, 
-                                      key=f"ui_seg_preset_{si}")
+            ls = ["(默认)"] + presets
+            vc = st.selectbox(f"段{si+1} 具体音色", ls, 
+                             index=0 if default_voice not in presets else presets.index(default_voice) + 1,
+                             key=f"ui_seg_preset_{si}")
         with c4:
-            speed = st.slider(f"语速", 0.5, 2.0, default_seg["speed"], 0.1, key=f"ui_seg_speed_{si}")
+            speed = st.slider(f"段{si+1} 语速", 0.5, 2.0, default_seg["speed"], 0.1, key=f"ui_seg_speed_{si}")
+            pause = st.number_input(f"段{si+1} 停顿 (秒)", min_value=0.0, max_value=5.0, value=default_seg["pause"], step=0.1, key=f"ui_seg_pause_{si}")
+        
+        voice_choice = None
+        if vc != "(默认)":
+            voice_choice = vc
         
         # 将配置添加到 audio_segments 列表
         audio_segments.append({
             "content": content,
             "voice_category": category,
-            "voice_choice": voice_choice if voice_choice != "自动选择" else None,
+            "voice_choice": voice_choice,
             "speed": speed,
-            "pause": default_seg["pause"],
-            "engine_pref": "在线优先"
+            "pause": pause,
+            "engine_pref": engine_pref
         })
 
 with tab_voice_library:
@@ -625,103 +1133,214 @@ with tab_voice_library:
     tab1, tab2, tab3 = st.tabs(["🎙️ 英文女声", "🎙️ 英文男声", "🎙️ 中文音色"])
     
     with tab1:
+        st.markdown('<div class="voice-library">', unsafe_allow_html=True)
         for voice in EN_FEMALE:
-            with st.container():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"**{get_voice_display_name(voice)}**")
-                    st.caption(get_voice_style(voice))
-                with col2:
-                    if st.button("试听", key=f"sample_{voice}"):
-                        st.info("试听功能需要网络连接")
+            sample_path = ensure_sample_voice(voice, "This is a sample of female English voice.")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f'<div class="voice-name">{get_voice_display_name(voice)}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-category">英文女声</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-style">{get_voice_style(voice)}</div>', unsafe_allow_html=True)
+            with col2:
+                if sample_path and os.path.exists(sample_path):
+                    st.audio(sample_path, format="audio/mp3")
+                else:
+                    st.warning("样本生成中...")
+        
     
     with tab2:
+        st.markdown('<div class="voice-library">', unsafe_allow_html=True)
         for voice in EN_MALE:
-            with st.container():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"**{get_voice_display_name(voice)}**")
-                    st.caption(get_voice_style(voice))
-                with col2:
-                    if st.button("试听", key=f"sample_{voice}"):
-                        st.info("试听功能需要网络连接")
+            sample_path = ensure_sample_voice(voice, "This is a sample of male English voice.")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f'<div class="voice-name">{get_voice_display_name(voice)}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-category">英文男声</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-style">{get_voice_style(voice)}</div>', unsafe_allow_html=True)
+            with col2:
+                if sample_path and os.path.exists(sample_path):
+                    st.audio(sample_path, format="audio/mp3")
+                else:
+                    st.warning("样本生成中...")
+        
     
     with tab3:
+        st.markdown('<div class="voice-library">', unsafe_allow_html=True)
         for voice in ZH_VOICES:
-            with st.container():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"**{get_voice_display_name(voice)}**")
-                    st.caption(get_voice_style(voice))
-                with col2:
-                    if st.button("试听", key=f"sample_{voice}"):
-                        st.info("试听功能需要网络连接")
+            sample_path = ensure_sample_voice(voice, "这是一个中文音色样本。")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f'<div class="voice-name">{get_voice_display_name(voice)}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-category">中文音色</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-style">{get_voice_style(voice)}</div>', unsafe_allow_html=True)
+            with col2:
+                if sample_path and os.path.exists(sample_path):
+                    st.audio(sample_path, format="audio/mp3")
+                else:
+                    st.warning("样本生成中...")
+
+with tab_voice_settings:
+    st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
+    st.markdown("### 默认音色设置")
+    st.info("在这里设置各类音色的默认选择，音频编排中的音色选择会默认使用这里的设置")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("#### 英文女声")
+        default_female = st.selectbox(
+            "默认英文女声音色",
+            options=EN_FEMALE,
+            index=0,
+            format_func=lambda x: f"{get_voice_display_name(x)} - {get_voice_style(x)}",
+            key="default_voice_英文女声"
+        )
+    
+    with col2:
+        st.markdown("#### 英文男声")
+        default_male = st.selectbox(
+            "默认英文男声音色",
+            options=EN_MALE,
+            index=0,
+            format_func=lambda x: f"{get_voice_display_name(x)} - {get_voice_style(x)}",
+            key="default_voice_英文男声"
+        )
+    
+    with col3:
+        st.markdown("#### 中文音色")
+        default_chinese = st.selectbox(
+            "默认中文音色",
+            options=ZH_VOICES,
+            index=0,
+            format_func=lambda x: f"{get_voice_display_name(x)} - {get_voice_style(x)}",
+            key="default_voice_中文音色"
+        )
 
 # ---------- Frame rendering ----------
-def render_frame(en, ph, cn, conf, size=(640, 360)):
-    """渲染单帧图像 - 优化中文显示"""
+def render_frame(en, ph, cn, conf, size=(1280,720)):
+    """渲染单帧图像 - 专门修复音标显示问题"""
     W,H = size
     
     try:
+        # 应用文字区域宽度比例
+        text_area_width = int(W * conf.get("text_area_width_ratio", 0.85))
+        text_start_x = (W - text_area_width) // 2
+        
         # 创建背景
-        bg_color = conf.get("bg_color", "#F0F8FF")
-        base = Image.new("RGB", (W,H), bg_color)
+        if conf.get("bg_mode") == "image" and conf.get("bg_image"):
+            # 使用背景图片
+            bg_img = conf["bg_image"]
+            # 调整背景图片大小以适应帧尺寸
+            bg_img = bg_img.resize((W, H), Image.Resampling.LANCZOS)
+            base = bg_img.convert("RGB")
+        else:
+            # 使用纯色背景
+            bg_color = conf.get("bg_color", "#D1E1EF")  # 默认背景颜色
+            base = Image.new("RGB", (W,H), bg_color)
+        
         draw = ImageDraw.Draw(base)
 
-        # 加载字体
-        font_en = load_font(conf.get("english_size", 36))
-        font_cn = load_font(conf.get("chinese_size", 32))
-        phonetic_font = load_phonetic_font(conf.get("phonetic_size", 24))
-
-        # 颜色设置
-        english_color = conf.get("english_color", "#000000")
-        phonetic_color = conf.get("phonetic_color", "#E67E22")
-        chinese_color = conf.get("chinese_color", "#000000")
+        # 加载字体 - 专门为音标使用不同的字体策略
+        font_en = load_font(None, conf.get("english_size", 60))
+        font_cn = load_font(None, conf.get("chinese_size", 50))
         
-        # 计算位置
-        text_area_width = int(W * 0.9)
-        text_start_x = (W - text_area_width) // 2
+        # 为音标专门处理字体 - 使用专门的音标字体加载函数
+        phonetic_size = conf.get("phonetic_size", 40)
+        phonetic_font = load_phonetic_font(phonetic_size)
+
+        # 计算文本位置
+        english_color = conf.get("english_color", "#000000")
+        phonetic_color = conf.get("phonetic_color", "#E6BF20")
+        chinese_color = conf.get("chinese_color", "#000000")
         
         # 计算总高度
         total_height = (
-            conf.get("english_size", 36) + 
-            conf.get("phonetic_size", 24) + 
-            conf.get("chinese_size", 32) + 40
+            conf.get("english_size", 60) + 
+            phonetic_size + 
+            conf.get("chinese_size", 50) +
+            conf.get("english_phonetic_gap", 10) +
+            conf.get("phonetic_cn_gap", 10)
         )
         
         start_y = (H - total_height) // 2
         
-        # 绘制文字背景板
-        padding = 20
-        bg_rect = Image.new('RGBA', (text_area_width, total_height + padding), (255, 255, 255, 200))
-        base.paste(bg_rect, (text_start_x, start_y - padding//2), bg_rect)
+        # 如果启用文字背景板，绘制背景
+        if conf.get("text_bg_enable", False):
+            padding = conf.get("text_padding", 20)
+            bg_alpha = int(conf.get("text_bg_alpha", 0.35) * 255)
+            bg_color = conf.get("text_bg_color", "#FFFFFF")
+            bg_radius = conf.get("text_bg_radius", 12)
+            
+            # 创建半透明背景
+            bg_rect = Image.new('RGBA', (text_area_width, total_height + padding * 2), (255, 255, 255, 0))
+            bg_draw = ImageDraw.Draw(bg_rect)
+            
+            try:
+                rgb_color = ImageColor.getrgb(bg_color)
+                rgba_color = (*rgb_color, bg_alpha)
+                bg_draw.rounded_rectangle(
+                    [(0, 0), (text_area_width, total_height + padding * 2)],
+                    radius=bg_radius,
+                    fill=rgba_color
+                )
+            except Exception:
+                rgba_color = (255, 255, 255, bg_alpha)
+                bg_draw.rounded_rectangle(
+                    [(0, 0), (text_area_width, total_height + padding * 2)],
+                    radius=bg_radius,
+                    fill=rgba_color
+                )
+            
+            base.paste(bg_rect, (text_start_x, start_y - padding), bg_rect)
         
-        # 英语文本
+        # 英语
         y = start_y
-        bbox = draw.textbbox((0, 0), en, font=font_en)
-        text_width = bbox[2] - bbox[0]
-        x = text_start_x + (text_area_width - text_width) // 2
-        draw.text((x, y), en, font=font_en, fill=english_color)
+        try:
+            bbox = draw.textbbox((0, 0), en, font=font_en)
+            text_width = bbox[2] - bbox[0]
+            x = text_start_x + (text_area_width - text_width) // 2
+            draw.text((x, y), en, font=font_en, fill=english_color)
+        except:
+            x = text_start_x + (text_area_width - len(en) * 20) // 2
+            draw.text((x, y), en, font=font_en, fill=english_color)
         
-        # 音标文本
-        y += conf.get("english_size", 36) + 10
+        y += conf.get("english_size", 60) + conf.get("english_phonetic_gap", 10)
+        
+        # 音标 - 使用转换后的文本
         converted_ph = convert_phonetic_text(ph)
-        bbox = draw.textbbox((0, 0), f"/{converted_ph}/", font=phonetic_font)
-        text_width = bbox[2] - bbox[0]
-        x = text_start_x + (text_area_width - text_width) // 2
-        draw.text((x, y), f"/{converted_ph}/", font=phonetic_font, fill=phonetic_color)
+        try:
+            bbox = draw.textbbox((0, 0), converted_ph, font=phonetic_font)
+            text_width = bbox[2] - bbox[0]
+            x = text_start_x + (text_area_width - text_width) // 2
+            draw.text((x, y), converted_ph, font=phonetic_font, fill=phonetic_color)
+        except Exception as e:
+            # 如果音标渲染失败，尝试使用英文字体
+            try:
+                bbox = draw.textbbox((0, 0), converted_ph, font=font_en)
+                text_width = bbox[2] - bbox[0]
+                x = text_start_x + (text_area_width - text_width) // 2
+                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
+            except:
+                # 最终备选：显示原始文本
+                x = text_start_x + (text_area_width - len(converted_ph) * 15) // 2
+                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
         
-        # 中文文本
-        y += conf.get("phonetic_size", 24) + 10
-        bbox = draw.textbbox((0, 0), cn, font=font_cn)
-        text_width = bbox[2] - bbox[0]
-        x = text_start_x + (text_area_width - text_width) // 2
-        draw.text((x, y), cn, font=font_cn, fill=chinese_color)
+        y += phonetic_size + conf.get("phonetic_cn_gap", 10)
+        
+        # 中文
+        try:
+            bbox = draw.textbbox((0, 0), cn, font=font_cn)
+            text_width = bbox[2] - bbox[0]
+            x = text_start_x + (text_area_width - text_width) // 2
+            draw.text((x, y), cn, font=font_cn, fill=chinese_color)
+        except Exception as e:
+            x = text_start_x + (text_area_width - len(cn) * 25) // 2
+            draw.text((x, y), cn, font=font_cn, fill=chinese_color)
 
         return base
     except Exception as e:
-        # 简化错误处理
-        error_img = Image.new("RGB", (W, H), bg_color)
+        st.error(f"帧渲染失败: {e}")
+        error_img = Image.new("RGB", (W, H), conf.get("bg_color", "#D1E1EF"))
         draw = ImageDraw.Draw(error_img)
         draw.text((50, H//2), "渲染错误", fill="red")
         return error_img
@@ -730,49 +1349,174 @@ def render_frame(en, ph, cn, conf, size=(640, 360)):
 st.markdown('<div class="card-header">👀 效果预览</div>', unsafe_allow_html=True)
 
 if uploaded is not None and df is not None:
-    # 创建两列布局
+    # 创建两列布局：左侧样式设计，右侧实时预览
     preview_col1, preview_col2 = st.columns([1, 1])
     
     with preview_col1:
-        st.markdown("### 🎨 显示设置")
+        st.markdown('<div class="card-header">🎨 样式设计</div>', unsafe_allow_html=True)
         
-        # 背景设置
-        bg_color = st.color_picker("背景颜色", "#F0F8FF")
+        # 使用选项卡组织样式设置
+        tab_bg, tab_text, tab_layout, tab_advanced = st.tabs(["🎨 背景设置", "🔤 文字样式", "📐 布局调整", "⚙️ 高级设置"])
         
-        # 文字样式
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            en_size = st.slider("英语字号", 20, 60, 36)
-            en_color = st.color_picker("英语颜色", "#000000")
-        with col2:
-            ph_size = st.slider("音标字号", 16, 40, 24)
-            ph_color = st.color_picker("音标颜色", "#E67E22")
-        with col3:
-            cn_size = st.slider("中文字号", 20, 50, 32)
-            cn_color = st.color_picker("中文颜色", "#000000")
+        with tab_bg:
+            st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
+            # --- 背景设置 ---
+            bg_col1, bg_col2 = st.columns([1,1])
+            with bg_col1:
+                bg_mode = st.selectbox("背景类型", ["纯色背景", "图片背景"], key="ui_bg_mode")
+            with bg_col2:
+                ui_bg_color = st.color_picker("背景颜色", "#D1E1EF", key="ui_bg_color")
+            ui_bg_image = None
+            if bg_mode == "图片背景":
+                bg_file = st.file_uploader("上传背景图片 (JPG/PNG)", type=["jpg","jpeg","png"], key="ui_bgimg")
+                if bg_file:
+                    try:
+                        ui_bg_image = Image.open(bg_file).convert("RGBA")
+                        st.image(ui_bg_image, caption="背景预览", use_container_width=True)
+                    except Exception:
+                        st.error("无法读取背景图片")
         
-        st.info("💡 使用Google Fonts确保中英文正常显示")
+        with tab_text:
+            st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
+            
+            # --- 文字样式 ---
+            st.markdown("**文字样式**")
+            col_en, col_ph, col_cn = st.columns(3)
+            with col_en:
+                en_size = st.slider("英语字号", 0, 160, 60, key="ui_en_size")
+                en_color = st.color_picker("英语颜色", "#000000", key="ui_en_color")
+            with col_ph:
+                ph_size = st.slider("音标字号", 0, 120, 40, key="ui_ph_size")
+                ph_color = st.color_picker("音标颜色", "#E6BF20", key="ui_ph_color")
+            with col_cn:
+                cn_size = st.slider("中文字号", 0, 120, 50, key="ui_cn_size")
+                cn_color = st.color_picker("中文颜色", "#000000", key="ui_cn_color")
+            
+            # 音标显示解决方案
+            st.markdown("**音标显示解决方案**")
+            st.success("""
+            **已启用音标显示优化方案：**
+            - ✅ 使用 Google Fonts 的 Noto Sans IPA 字体（专门支持音标）
+            - ✅ 使用 Charis SIL 字体作为备选（专门为语言学设计）
+            - ✅ 自动字符映射确保兼容性
+            - ✅ 支持自定义字体上传
+            """)
+            
+            # 字体信息显示
+            st.markdown("**字体信息**")
+            if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+                st.success(f"✅ 当前使用自定义字体")
+            elif DEFAULT_FONT:
+                font_name = os.path.basename(DEFAULT_FONT)
+                st.info(f"📝 系统字体: {font_name}")
+            else:
+                st.warning("⚠️ 使用默认字体，音标显示可能不正常")
+        
+        with tab_layout:
+            st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
+            
+            # --- 背景板与间距 ---
+            st.markdown("**背景板与间距**")
+            b1, b2, b3, b4 = st.columns(4)
+            with b1:
+                text_bg_enable = st.checkbox("启用文字背景板", value=True, key="ui_text_bg_enable")
+            with b2:
+                text_bg_color = st.color_picker("文字背景颜色", "#FFFFFF", key="ui_text_bg_color")
+            with b3:
+                text_bg_alpha = st.slider("背景透明度", 0.0, 1.0, 0.35, 0.05, key="ui_text_bg_alpha")
+            with b4:
+                text_bg_radius = st.slider("背景圆角", 0, 60, 12, key="ui_text_bg_radius")
+
+            g1, g2, g3, g4 = st.columns(4)
+            with g1:
+                english_ph_gap = st.slider("英语→音标间距", 0, 200, 10, key="ui_gap_en_ph")
+            with g2:
+                ph_cn_gap = st.slider("音标→中文间距", 0, 200, 10, key="ui_gap_ph_cn")
+            with g3:
+                line_spacing = st.slider("行间距", 0, 50, 6, key="ui_line_spacing")
+            with g4:
+                text_padding = st.slider("文字内边距", 0, 120, 20, key="ui_text_padding")
+            
+            # --- 文字区域设置 ---
+            st.markdown("**文字区域设置**")
+            t1, t2 = st.columns(2)
+            with t1:
+                text_area_ratio = st.slider("文字区域宽度比例", 0.3, 1.0, 0.85, key="ui_text_area_ratio")
+        
+        with tab_advanced:
+            st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
+            
+            # 自定义字体上传
+            st.markdown("**自定义字体**")
+            st.info("上传支持音标和中文的字体文件（TTF/OTF格式）")
+            custom_font_file = st.file_uploader("上传自定义字体文件", type=["ttf", "otf"], key="ui_custom_font")
+            if custom_font_file:
+                try:
+                    # 保存自定义字体到临时文件
+                    custom_font_path = os.path.join(tempfile.gettempdir(), f"custom_font_{hashlib.md5(custom_font_file.getvalue()).hexdigest()}.ttf")
+                    with open(custom_font_path, "wb") as f:
+                        f.write(custom_font_file.getvalue())
+                    st.session_state.custom_font_path = custom_font_path
+                    st.success("✅ 自定义字体上传成功！")
+                except Exception as e:
+                    st.error(f"字体文件上传失败: {e}")
+            
+            # 字体测试
+            st.markdown("**字体测试**")
+            test_text = st.text_input("测试文本", value="Hello /həˈloʊ/ 你好", key="ui_font_test")
+            if test_text:
+                test_font_path = st.session_state.get('custom_font_path', DEFAULT_FONT)
+                try:
+                    test_font = ImageFont.truetype(test_font_path, 20) if test_font_path else ImageFont.load_default()
+                    test_img = Image.new('RGB', (400, 50), color='white')
+                    test_draw = ImageDraw.Draw(test_img)
+                    test_draw.text((10, 10), test_text, font=test_font, fill='black')
+                    st.image(test_img, caption="字体测试预览", use_container_width=True)
+                    
+                    # 显示转换后的音标
+                    if '/' in test_text:
+                        phonetic_part = test_text.split('/')[1] if len(test_text.split('/')) > 1 else ""
+                        converted_phonetic = convert_phonetic_text(phonetic_part)
+                        st.write(f"原始音标: {phonetic_part}")
+                        st.write(f"转换后: /{converted_phonetic}/")
+                except Exception as e:
+                    st.error(f"字体测试失败: {e}")
     
     with preview_col2:
-        st.markdown("### 👁️ 实时预览")
+        st.markdown('<div class="card-header">👁️ 实时预览</div>', unsafe_allow_html=True)
         
         # 选择预览的行
         preview_row = st.selectbox(
-            "选择预览的句子",
+            "选择预览的行",
             options=list(range(len(df))),
-            format_func=lambda i: f"{i+1}. {df.iloc[i]['英语'][:20]}...",
+            format_func=lambda i: f"{i+1} - {df.iloc[i]['英语'][:30]}...",
             key="preview_row"
         )
         
-        # 汇总样式配置
+        # 实时生成预览
+        if st.button("🔄 更新预览", width='stretch'):
+            st.session_state.force_preview_update = True
+        
+        # 汇总 style_conf
         style_conf = {
-            "bg_color": bg_color,
+            "bg_mode": "image" if ui_bg_image else "color",
+            "bg_color": ui_bg_color,
+            "bg_image": ui_bg_image,
             "english_size": en_size,
             "english_color": en_color,
             "phonetic_size": ph_size,
             "phonetic_color": ph_color,
             "chinese_size": cn_size,
             "chinese_color": cn_color,
+            "text_bg_enable": text_bg_enable,
+            "text_bg_color": text_bg_color,
+            "text_bg_alpha": text_bg_alpha,
+            "text_bg_radius": text_bg_radius,
+            "text_padding": text_padding,
+            "text_area_width_ratio": text_area_ratio,
+            "english_phonetic_gap": english_ph_gap,
+            "phonetic_cn_gap": ph_cn_gap,
+            "line_spacing": line_spacing,
         }
         
         # 实时渲染预览
@@ -781,12 +1525,21 @@ if uploaded is not None and df is not None:
         ph = str(row.get("音标",""))
         cn = str(row.get("中文",""))
         
+        # 显示音标转换信息
+        if ph and ph.strip():
+            converted_ph = convert_phonetic_text(ph)
+            if ph != converted_ph:
+                st.info(f"音标已自动转换: `/{ph}/` → `/{converted_ph}/`")
+            else:
+                st.success(f"音标无需转换: `/{ph}/`")
+        
         # 生成预览图像
-        preview_image = render_frame(en, ph, cn, style_conf)
+        preview_image = render_frame(en, ph, cn, style_conf, (640, 360))
         
         # 显示实时预览
         st.markdown('<div class="live-preview-container">', unsafe_allow_html=True)
-        st.image(preview_image, use_container_width=True)
+        st.markdown('<div class="live-preview-title">实时预览效果</div>', unsafe_allow_html=True)
+        st.image(preview_image, caption="样式预览", use_container_width=True)
         
         # 显示预览文本
         st.markdown(f'<div class="live-preview-text live-preview-english">{en}</div>', unsafe_allow_html=True)
@@ -794,165 +1547,354 @@ if uploaded is not None and df is not None:
             converted_ph_display = convert_phonetic_text(ph)
             st.markdown(f'<div class="live-preview-text live-preview-phonetic">/{converted_ph_display}/</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="live-preview-text live-preview-chinese">{cn}</div>', unsafe_allow_html=True)
+        
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # 音频预览
+        # 音频预览部分
         st.markdown("### 🔊 音频预览")
-        if st.button("生成音频预览", use_container_width=True):
-            with st.spinner("生成中..."):
+        if st.button("生成音频预览", width='stretch'):
+            with st.spinner("正在生成音频预览..."):
                 preview_audio = generate_preview_audio(df, preview_row, audio_segments)
-                if preview_audio:
+                
+                if preview_audio and os.path.exists(preview_audio):
                     st.audio(preview_audio, format="audio/mp3")
                     st.success("音频预览生成完成！")
                 else:
-                    st.error("音频生成失败，请检查网络连接")
+                    st.error("音频预览生成失败")
+        
+else:
+    st.warning("请先上传数据文件以启用预览功能")
+
+# ---------- 获取音频时长 ----------
+def get_audio_duration(audio_path: str) -> float:
+    """获取音频文件的时长（秒）"""
+    try:
+        if PYDUB_AVAILABLE:
+            audio = AudioSegment.from_file(audio_path)
+            return len(audio) / 1000.0  # 转换为秒
+        else:
+            # 备用方案：使用 ffprobe
+            ffprobe_path = find_ffmpeg_path().replace("ffmpeg", "ffprobe")
+            cmd = [
+                ffprobe_path, "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", audio_path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return float(result.stdout.strip())
+    except Exception as e:
+        # 如果无法获取时长，返回默认值
+        return 3.0
+
+# ---------- 合成视频 ----------
+def merge_video_audio(video_path, audio_path, out_path):
+    if not ffmpeg_available():
+        raise RuntimeError("ffmpeg missing for merge_video_audio")
+    cmd = [
+        "ffmpeg","-y","-i",video_path,"-i",audio_path,
+        "-c:v","copy","-c:a","aac","-shortest",out_path
+    ]
+    run_ffmpeg_command(cmd)
+
+def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, progress_cb=None):
+    """整合生成流程 - 修复版本"""
+    tmpdir = tempfile.mkdtemp(prefix="gen_")
+    try:
+        W,H = video_params.get("resolution",(1280,720))
+        fps = video_params.get("fps",12)
+        
+        frame_files = []
+        audios = []
+        total_steps = len(rows) * len(audio_segments) + 2  # +2 用于音频合并和视频合成
+        step = 0
+        
+        for rid in rows:
+            row = df.iloc[rid]
+            en = str(row.get("英语",""))
+            ph = str(row.get("音标",""))
+            cn = str(row.get("中文",""))
+            
+            # 渲染当前单词的画面
+            img = render_frame(en, ph, cn, style_conf, (W,H))
+            
+            # 音频生成
+            seg_paths = []
+            total_audio_duration = 0
+            
+            for seg_idx, seg in enumerate(audio_segments):
+                text = en if seg["content"]=="英语" else (ph if seg["content"]=="音标" else cn)
+                out_mp3 = os.path.join(tmpdir, f"{rid}_{seg_idx}_{seg['content']}.mp3")
+                
+                ok = generate_tts_cached(text, seg["voice_category"], seg["voice_choice"], seg["speed"], "在线优先", out_mp3)
+                if ok and os.path.exists(out_mp3):
+                    # 获取实际音频时长
+                    audio_duration = get_audio_duration(out_mp3)
+                    total_audio_duration += audio_duration
+                    seg_paths.append(out_mp3)
+                else:
+                    # 如果TTS失败，使用默认时长
+                    default_duration = 3.0
+                    total_audio_duration += default_duration
+                    create_silent_mp3(out_mp3, default_duration)
+                    seg_paths.append(out_mp3)
+                
+                # 添加停顿
+                if seg.get("pause",0) > 0:
+                    pause_path = os.path.join(tmpdir, f"pause_{rid}_{seg_idx}.mp3")
+                    create_silent_mp3(pause_path, seg["pause"])
+                    total_audio_duration += seg["pause"]
+                    seg_paths.append(pause_path)
+                
+                step += 1
+                if progress_cb:
+                    progress_cb(step/total_steps)
+
+            # 合并当前行的音频
+            if seg_paths:
+                merged_audio = os.path.join(tmpdir, f"{rid}_merged.mp3")
+                try:
+                    concat_audios_ffmpeg(seg_paths, merged_audio)
+                    audios.append(merged_audio)
+                    
+                    # 根据音频时长生成对应数量的帧
+                    frames_this_word = int(total_audio_duration * fps)
+                    for i in range(frames_this_word):
+                        fname = os.path.join(tmpdir, f"{rid}_{i:04d}.png")
+                        img.save(fname)
+                        frame_files.append(fname)
+                        
+                except Exception as e:
+                    st.error(f"音频合并失败: {e}")
+                    # 使用默认帧数作为备选
+                    frames_this_word = int(3.0 * fps)  # 默认3秒
+                    for i in range(frames_this_word):
+                        fname = os.path.join(tmpdir, f"{rid}_{i:04d}.png")
+                        img.save(fname)
+                        frame_files.append(fname)
+
+        # 检查是否有足够的帧
+        if not frame_files:
+            st.error("没有生成任何帧，无法合成视频")
+            return None
+            
+        # 合成视频（无音频）
+        list_txt = os.path.join(tmpdir, "imgs.txt")
+        with open(list_txt, "w", encoding="utf-8") as f:
+            for p in frame_files:
+                f.write(f"file '{p}'\n")
+                f.write(f"duration {1.0/fps}\n")  # 每帧的持续时间
+        
+        video_no_audio = os.path.join(tmpdir, "video.mp4")
+        
+        cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
+            "-i", list_txt, "-r", str(fps), "-pix_fmt", "yuv420p", 
+            video_no_audio
+        ]
+        
+        try:
+            run_ffmpeg_command(cmd)
+        except Exception as e:
+            st.error(f"视频合成失败: {e}")
+            return None
+        
+        # 合并所有音频
+        if audios:
+            final_audio = os.path.join(tmpdir, "final_audio.mp3")
+            try:
+                concat_audios_ffmpeg(audios, final_audio)
+            except Exception as e:
+                st.error(f"最终音频合并失败: {e}")
+                return None
+            
+            # 合并音视频
+            out_video = os.path.join(tmpdir, "final_out.mp4")
+            cmd = [
+                "ffmpeg", "-y", "-i", video_no_audio, "-i", final_audio,
+                "-c:v", "copy", "-c:a", "aac", "-shortest", out_video
+            ]
+            try:
+                run_ffmpeg_command(cmd)
+            except Exception as e:
+                st.error(f"音视频合并失败: {e}")
+                return None
+        else:
+            out_video = video_no_audio
+        
+        if os.path.exists(out_video):
+            # 关键修复：将视频文件复制到永久位置
+            permanent_video_path = os.path.join(CACHE_DIR, f"generated_video_{int(time.time())}.mp4")
+            try:
+                shutil.copy2(out_video, permanent_video_path)
+                return permanent_video_path
+            except Exception as e:
+                # 如果复制失败，仍然返回原始路径
+                return out_video
+        else:
+            st.error("输出视频文件不存在")
+            return None
+            
+    except Exception as e:
+        st.error(f"生成流程异常: {e}")
+        import traceback
+        st.error(f"详细错误: {traceback.format_exc()}")
+        return None
+    finally:
+        # 清理临时文件
+        try:
+            shutil.rmtree(tmpdir)
+        except:
+            pass
 
 # ---------- 生成与下载部分 ----------
-st.markdown('<div class="card-header">📤 生成内容</div>', unsafe_allow_html=True)
+st.markdown('<div class="card-header">📤 生成与下载</div>', unsafe_allow_html=True)
 
+# FFmpeg 检测和安装指引
+ffmpeg_path = find_ffmpeg_path()
 if not ffmpeg_available():
-    st.warning("""
-    ⚠️ **视频生成功能受限**
+    st.error("⚠️ FFmpeg 未找到，视频生成功能不可用")
     
-    当前环境未检测到FFmpeg，视频生成功能不可用。
-    但您仍然可以：
-    - ✅ 生成单张学习卡片图片
-    - ✅ 生成音频内容
-    - ✅ 预览学习效果
-    """)
+    if 'STREAMLIT_SHARING_MODE' in os.environ:
+        st.info("""
+        **Streamlit Cloud 环境检测**
+        
+        在 Streamlit Cloud 上，请确保 requirements.txt 包含：
+        ```
+        imageio[ffmpeg]>=2.33.0
+        ```
+        """)
+    elif sys.platform.startswith("darwin"):
+        st.info("""
+        **macOS FFmpeg 安装：**
+        ```bash
+        brew install ffmpeg
+        ```
+        """)
+    else:
+        st.info("""
+        **FFmpeg 安装指南：**
+        
+        **Windows:**
+        1. 下载: https://ffmpeg.org/download.html
+        2. 解压到 C:\\ffmpeg
+        3. 添加 C:\\ffmpeg\\bin 到系统 PATH
+        
+        **Linux:**
+        ```bash
+        sudo apt-get install ffmpeg
+        ```
+        """)
 
+# 在生成视频部分使用 audio_segments
 if uploaded is not None and df is not None:
-    # 生成学习卡片
-    st.markdown("### 🖼️ 生成学习卡片")
+    total = len(df)
     
-    selected_rows = st.multiselect(
-        "选择要生成卡片的句子", 
-        options=list(range(len(df))),
-        format_func=lambda i: f"{i+1}. {df.iloc[i]['英语'][:20]}...",
-        default=[0] if len(df) > 0 else []
+    # 默认选择所有行（按顺序）
+    default_rows = list(range(min(total, 10)))  # 默认选择前10行或全部（如果少于10行）
+    
+    rows = st.multiselect(
+        "选择生成的行", 
+        options=list(range(total)), 
+        format_func=lambda i: f"{i+1} - {df.iloc[i]['英语'][:30]}...", 
+        default=default_rows
     )
     
-    if st.button("🖨️ 生成学习卡片", use_container_width=True):
-        if selected_rows:
-            with st.spinner("生成学习卡片中..."):
-                # 生成样式配置
-                style_conf = {
-                    "bg_color": bg_color,
-                    "english_size": en_size,
-                    "english_color": en_color,
-                    "phonetic_size": ph_size,
-                    "phonetic_color": ph_color,
-                    "chinese_size": cn_size,
-                    "chinese_color": cn_color,
-                }
+    if rows:
+        if st.button("▶️ 开始生成视频", width='stretch', disabled=not ffmpeg_available()):
+            # 预检查
+            if not ffmpeg_available():
+                st.error("FFmpeg 不可用，无法生成视频")
+                st.stop()
                 
-                # 创建ZIP文件包含所有图片
-                import zipfile
-                zip_buffer = io.BytesIO()
+            if df is None:
+                st.error("没有数据可处理")
+                st.stop()
                 
-                with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
-                    for idx in selected_rows:
-                        row = df.iloc[idx]
-                        en = str(row.get("英语",""))
-                        ph = str(row.get("音标",""))
-                        cn = str(row.get("中文",""))
-                        
-                        # 生成图片
-                        img = render_frame(en, ph, cn, style_conf, (800, 450))
-                        
-                        # 保存到内存
-                        img_buffer = io.BytesIO()
-                        img.save(img_buffer, format='PNG')
-                        
-                        # 添加到ZIP
-                        zip_file.writestr(f"card_{idx+1}_{en[:10]}.png", img_buffer.getvalue())
+            if not rows:
+                st.error("请选择要生成的行")
+                st.stop()
+            
+            progress = st.progress(0.0)
+            status = st.empty()
+            
+            def cb(p):
+                progress.progress(p)
+                status.text(f"进度: {int(p*100)}%")
+            
+            params = {"resolution":(1280,720),"fps":12}
+            status.text("生成中...")
+            
+            try:
+                outp = generate_video_pipeline(df, rows, style_conf, audio_segments, params, progress_cb=cb)
                 
-                # 提供下载
-                st.success(f"成功生成 {len(selected_rows)} 张学习卡片")
-                st.download_button(
-                    label="📥 下载学习卡片包",
-                    data=zip_buffer.getvalue(),
-                    file_name="english_learning_cards.zip",
-                    mime="application/zip",
-                    use_container_width=True
-                )
-        else:
-            st.warning("请选择至少一个句子")
-    
-    # 生成音频包
-    st.markdown("### 🔊 生成音频包")
-    
-    if st.button("🎵 生成音频文件", use_container_width=True):
-        if selected_rows:
-            with st.spinner("生成音频文件中..."):
-                # 创建ZIP文件包含所有音频
-                zip_buffer = io.BytesIO()
-                
-                with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
-                    for idx in selected_rows:
-                        row = df.iloc[idx]
-                        en = str(row.get("英语",""))
-                        
-                        # 生成第一个音频段
-                        if audio_segments:
-                            seg = audio_segments[0]
-                            text = en if seg["content"]=="英语" else ""
-                            
-                            # 临时文件
-                            fd, tmp_mp3 = tempfile.mkstemp(suffix=".mp3")
-                            os.close(fd)
-                            
-                            if generate_tts_cached(text, seg["voice_category"], seg["voice_choice"], seg["speed"], "在线优先", tmp_mp3):
-                                with open(tmp_mp3, 'rb') as f:
-                                    zip_file.writestr(f"audio_{idx+1}_{en[:10]}.mp3", f.read())
-                            
-                            safe_remove(tmp_mp3)
-                
-                st.success(f"成功生成 {len(selected_rows)} 个音频文件")
-                st.download_button(
-                    label="📥 下载音频包",
-                    data=zip_buffer.getvalue(),
-                    file_name="english_audio_files.zip",
-                    mime="application/zip",
-                    use_container_width=True
-                )
-        else:
-            st.warning("请选择至少一个句子")
+                if outp and os.path.exists(outp):
+                    st.success("✅ 视频生成完成")
+                    with open(outp,"rb") as f:
+                        st.video(f.read())
+                    with open(outp,"rb") as f:
+                        st.download_button("📥 下载视频", f, file_name="travel_english.mp4", width='stretch')
+                else:
+                    st.error("❌ 生成失败，请查看错误信息")
+            except Exception as e:
+                st.error(f"❌ 生成错误: {str(e)}")
+    else:
+        st.info("请选择至少一行进行生成。")
+else:
+    st.info("请先上传数据文件以启用视频生成功能")
 
-# ---------- 侧边栏 ----------
-st.sidebar.header("📦 功能")
-st.sidebar.info("""
-**主要功能：**
-- 📁 数据管理
-- 🔊 多音色音频
-- 🎨 学习卡片
-- 👀 实时预览
-""")
+# ---------- 侧边栏：模板与进度 ----------
+st.sidebar.header("📦 模板与任务")
+templates = load_templates()
+if st.sidebar.button("保存当前配置为模板", width='stretch'):
+    name = f"模板_{time.strftime('%H%M%S')}"
+    save_template(name, style_conf, audio_segments, {"resolution":(1280,720),"fps":12})
+    st.sidebar.success(f"已保存模板 {name}")
+if templates:
+    st.sidebar.subheader("已保存的模板")
+    for tname, tdata in templates:
+        if st.sidebar.button(f"应用模板 {tname}", width='stretch'):
+            style_conf.update(tdata["style"])
+            audio_segments[:] = tdata["audio"]
+            st.sidebar.info(f"已应用模板 {tname}")
 
-st.sidebar.header("🔧 系统状态")
-st.sidebar.write(f"✅ 语音合成: {'可用' if EDGE_TTS_AVAILABLE else '需安装'}")
-st.sidebar.write(f"✅ 图片生成: 可用")
-st.sidebar.write(f"🔶 视频合成: {'可用' if ffmpeg_available() else '需FFmpeg'}")
+# 学习进度
+st.sidebar.header("📚 学习进度")
+prog = load_progress()
+st.sidebar.write(f"已学习记录条目：{len(prog)}")
+if st.sidebar.button("清除学习记录", width='stretch'):
+    save_progress({})
+    st.sidebar.success("学习记录已清除")
 
-if not EDGE_TTS_AVAILABLE:
-    st.sidebar.warning("安装语音合成: `pip install edge-tts`")
+# ---------- 环境提示 ----------
+st.sidebar.header("🔧 系统环境")
+st.sidebar.write(f"✅ 操作系统: {sys.platform}")
+st.sidebar.write(f"✅ ffmpeg: {'可用' if ffmpeg_available() else '缺失'}")
+if ffmpeg_path:
+    st.sidebar.write(f"📍 路径: {ffmpeg_path}")
+st.sidebar.write(f"✅ pyttsx3: {'可用' if PYTTSX3_AVAILABLE else '缺失'}")
+st.sidebar.write(f"✅ edge-tts: {'可用' if EDGE_TTS_AVAILABLE else '缺失'}")
+st.sidebar.write(f"✅ pydub: {'可用' if PYDUB_AVAILABLE else '缺失'}")
 
-if not ffmpeg_available():
-    st.sidebar.warning("视频功能需要安装FFmpeg")
+# 字体检测信息
+if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+    st.sidebar.success("✅ 字体: 使用自定义字体")
+elif DEFAULT_FONT:
+    font_name = os.path.basename(DEFAULT_FONT)
+    st.sidebar.info(f"✅ 字体: {font_name}")
+else:
+    st.sidebar.warning("⚠️ 字体: 使用默认字体")
 
-st.sidebar.header("💡 使用提示")
-st.sidebar.info("""
-1. 上传包含英语和中文的CSV/Excel文件
-2. 配置音频段落和音色
-3. 调整显示样式
-4. 生成学习卡片和音频
-""")
+# 检测运行环境
+if 'STREAMLIT_SHARING_MODE' in os.environ:
+    st.sidebar.info("🌐 Streamlit Cloud 环境")
+else:
+    st.sidebar.info("💻 本地运行环境")
 
 # ---------- 页脚 ----------
 st.markdown(
-    """
-    <div style='text-align: center; padding: 20px; color: #64748b; margin-top: 40px;'>
-    © 2024 英语学习视频生成器 • 专注于英语学习内容制作
+    f"""
+    <div class='footer'>
+    © 2025 英语视频生成器 • 技术支持：AI 多媒体实验室  
+    环境：FFmpeg {"✅ 已检测" if ffmpeg_available() else "⚠️ 未检测"} | 平台: {sys.platform}
     </div>
     """,
     unsafe_allow_html=True)
