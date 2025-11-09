@@ -148,6 +148,7 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+IPA:wght@400;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Charis+SIL:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
 
 :root {{
   --primary-light: {PRIMARY_LIGHT};
@@ -491,6 +492,7 @@ div.stButton > button:hover {{
 .live-preview-chinese {{
   font-size: 20px;
   color: {TEXT_DARK};
+  font-family: 'Noto Sans SC', 'Microsoft YaHei', 'SimHei', sans-serif;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -672,6 +674,50 @@ def load_phonetic_font(size):
     
     # 尝试加载字体
     for font_path in phonetic_fonts:
+        if font_path and os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
+    
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
+
+def load_chinese_font(size):
+    """专门加载中文字体"""
+    chinese_fonts = []
+    
+    # 添加用户自定义字体
+    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+        chinese_fonts.append(st.session_state.custom_font_path)
+    
+    # 添加专门支持中文的字体
+    if sys.platform.startswith("win"):
+        chinese_fonts.extend([
+            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑
+            r"C:\Windows\Fonts\simhei.ttf",    # 黑体
+            r"C:\Windows\Fonts\simsun.ttc",    # 宋体
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+        ])
+    elif sys.platform.startswith("darwin"):
+        chinese_fonts.extend([
+            "/System/Library/Fonts/PingFang.ttf",        # 苹方
+            "/System/Library/Fonts/Arial Unicode.ttf",   # Arial Unicode
+            "/System/Library/Fonts/STHeiti Light.ttc",   # 华文黑体
+        ])
+    else:
+        chinese_fonts.extend([
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",       # 文泉驿微米黑
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", # Noto Sans CJK
+            "/usr/share/fonts/truetype/arphic/uming.ttc",           # 文鼎明体
+        ])
+    
+    # 添加默认字体
+    if DEFAULT_FONT:
+        chinese_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in chinese_fonts:
         if font_path and os.path.exists(font_path):
             try:
                 return ImageFont.truetype(font_path, size)
@@ -1009,6 +1055,10 @@ def convert_phonetic_text(text):
     # 只转换确实有问题的字符，保留所有标准音标符号
     converted = ''.join(PHONETIC_CHAR_MAP.get(char, char) for char in text)
     
+    # 如果转换后与原文本不同，记录日志
+    if converted != text:
+        st.info(f"音标已优化显示: `/{text}/` → `/{converted}/`")
+    
     return converted
 
 # ---------- 页面顶部 / 导航 ----------
@@ -1074,30 +1124,13 @@ with tab_audio_config:
 
     # 构建段配置表
     audio_segments = []
-    
-    # 默认音频编排设置
-    default_segments = [
-        {"content": "英语", "category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
-        {"content": "英语", "category": "英文男声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
-        {"content": "中文", "category": "中文音色", "voice_choice": None, "speed": 1.0, "pause": 0.3},
-        {"content": "英语", "category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.3}
-    ]
-    
     for si in range(int(n_segments)):
         st.markdown(f"**段 {si+1}**", unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns([1.5, 1.2, 1, 1])
-        
-        # 获取默认值
-        default_seg = default_segments[si] if si < len(default_segments) else default_segments[0]
-        
         with c1:
-            content = st.selectbox(f"段{si+1} 内容", ["英语", "音标", "中文"], 
-                                 index=["英语", "音标", "中文"].index(default_seg["content"]), 
-                                 key=f"ui_seg_content_{si}")
+            content = st.selectbox(f"段{si+1} 内容", ["英语", "音标", "中文"], key=f"ui_seg_content_{si}")
         with c2:
-            category = st.selectbox(f"段{si+1} 音色库", ["英文女声", "英文男声", "中文音色"], 
-                                  index=["英文女声", "英文男声", "中文音色"].index(default_seg["category"]), 
-                                  key=f"ui_seg_cat_{si}")
+            category = st.selectbox(f"段{si+1} 音色库", ["英文女声", "英文男声", "中文音色"], key=f"ui_seg_cat_{si}")
         with c3:
             # 从音色设置中获取默认音色
             voice_settings_key = f"default_voice_{category}"
@@ -1109,8 +1142,8 @@ with tab_audio_config:
                              index=0 if default_voice not in presets else presets.index(default_voice) + 1,
                              key=f"ui_seg_preset_{si}")
         with c4:
-            speed = st.slider(f"段{si+1} 语速", 0.5, 2.0, default_seg["speed"], 0.1, key=f"ui_seg_speed_{si}")
-            pause = st.number_input(f"段{si+1} 停顿 (秒)", min_value=0.0, max_value=5.0, value=default_seg["pause"], step=0.1, key=f"ui_seg_pause_{si}")
+            speed = st.slider(f"段{si+1} 语速", 0.5, 2.0, 1.0, 0.1, key=f"ui_seg_speed_{si}")
+            pause = st.number_input(f"段{si+1} 停顿 (秒)", min_value=0.0, max_value=5.0, value=0.3, step=0.1, key=f"ui_seg_pause_{si}")
         
         voice_choice = None
         if vc != "(默认)":
@@ -1218,7 +1251,7 @@ with tab_voice_settings:
 
 # ---------- Frame rendering ----------
 def render_frame(en, ph, cn, conf, size=(1280,720)):
-    """渲染单帧图像 - 专门修复音标显示问题"""
+    """渲染单帧图像 - 专门修复音标和中文显示问题"""
     W,H = size
     
     try:
@@ -1240,9 +1273,9 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         draw = ImageDraw.Draw(base)
 
-        # 加载字体 - 专门为音标使用不同的字体策略
+        # 加载字体 - 专门为中文使用不同的字体加载函数
         font_en = load_font(None, conf.get("english_size", 60))
-        font_cn = load_font(None, conf.get("chinese_size", 50))
+        font_cn = load_chinese_font(conf.get("chinese_size", 50))  # 使用专门的中文字体加载函数
         
         # 为音标专门处理字体 - 使用专门的音标字体加载函数
         phonetic_size = conf.get("phonetic_size", 40)
@@ -1327,15 +1360,23 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         y += phonetic_size + conf.get("phonetic_cn_gap", 10)
         
-        # 中文
+        # 中文 - 使用专门的中文字体
         try:
             bbox = draw.textbbox((0, 0), cn, font=font_cn)
             text_width = bbox[2] - bbox[0]
             x = text_start_x + (text_area_width - text_width) // 2
             draw.text((x, y), cn, font=font_cn, fill=chinese_color)
         except Exception as e:
-            x = text_start_x + (text_area_width - len(cn) * 25) // 2
-            draw.text((x, y), cn, font=font_cn, fill=chinese_color)
+            # 如果中文字体渲染失败，尝试使用其他字体
+            try:
+                bbox = draw.textbbox((0, 0), cn, font=font_en)
+                text_width = bbox[2] - bbox[0]
+                x = text_start_x + (text_area_width - text_width) // 2
+                draw.text((x, y), cn, font=font_en, fill=chinese_color)
+            except:
+                # 最终备选：显示原始文本
+                x = text_start_x + (text_area_width - len(cn) * 25) // 2
+                draw.text((x, y), cn, font=font_en, fill=chinese_color)
 
         return base
     except Exception as e:
@@ -1836,6 +1877,8 @@ if uploaded is not None and df is not None:
                     st.error("❌ 生成失败，请查看错误信息")
             except Exception as e:
                 st.error(f"❌ 生成错误: {str(e)}")
+                with st.expander("查看详细错误信息"):
+                    st.code(traceback.format_exc())
     else:
         st.info("请选择至少一行进行生成。")
 else:
