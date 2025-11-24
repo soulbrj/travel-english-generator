@@ -14,7 +14,6 @@ import subprocess
 from queue import Queue
 from threading import Thread
 from typing import List, Dict, Tuple, Optional
-import concurrent.futures
 
 import streamlit as st
 import pandas as pd
@@ -994,13 +993,12 @@ with tab_audio_config:
     recommended = recommend_preset(learning_goal)
     preset_choice = st.selectbox("预设播放模式", ["(自定义)"] + list(PRESET_MODES.keys()), index=1 if recommended in PRESET_MODES else 0, key="ui_preset_choice")
 
-    # 初始化音频段
+    # 初始化音频段 - 修复：默认使用英文女生、英文男生、中文音色
     if 'audio_segments' not in st.session_state:
         st.session_state.audio_segments = [
             {"content": "英语", "voice_category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
-            {"content": "音标", "voice_category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.2},
-            {"content": "中文", "voice_category": "中文音色", "voice_choice": None, "speed": 1.0, "pause": 0.5},
-            {"content": "英语", "voice_category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.3}
+            {"content": "英语", "voice_category": "英文男声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
+            {"content": "中文", "voice_category": "中文音色", "voice_choice": None, "speed": 1.0, "pause": 0.5}
         ]
 
     # 应用预设
@@ -1588,83 +1586,29 @@ def get_audio_duration(audio_path: str) -> float:
         # 如果无法获取时长，返回默认值
         return 3.0
 
-# ---------- 批量TTS生成函数 ----------
-def batch_generate_tts(tasks):
-    """批量生成TTS音频 - 使用线程池提高效率"""
-    results = {}
-    
-    def worker(task):
-        idx, text, voice_category, voice_choice, speed = task
-        try:
-            # 临时文件路径
-            fd, tmpmp3 = tempfile.mkstemp(suffix=".mp3")
-            os.close(fd)
-            
-            # 生成TTS
-            success = generate_tts_cached(text, voice_category, voice_choice, speed, "在线优先", tmpmp3)
-            
-            if success and os.path.exists(tmpmp3):
-                return idx, tmpmp3, True
-            else:
-                safe_remove(tmpmp3)
-                return idx, None, False
-        except Exception as e:
-            return idx, None, False
-    
-    # 使用线程池并行处理
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_task = {executor.submit(worker, task): task for task in tasks}
-        
-        for future in concurrent.futures.as_completed(future_to_task):
-            task = future_to_task[future]
-            try:
-                idx, audio_path, success = future.result()
-                results[idx] = (audio_path, success)
-            except Exception as e:
-                results[task[0]] = (None, False)
-    
-    return results
+# ---------- 合成视频 ----------
+def merge_video_audio(video_path, audio_path, out_path):
+    if not ffmpeg_available():
+        raise RuntimeError("ffmpeg missing for merge_video_audio")
+    cmd = [
+        "ffmpeg","-y","-i",video_path,"-i",audio_path,
+        "-c:v","copy","-c:a","aac","-shortest",out_path
+    ]
+    run_ffmpeg_command(cmd)
 
-# ---------- 优化后的视频生成函数 ----------
-def generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, video_params, progress_cb=None):
-    """优化后的视频生成流程 - 使用批量处理和并行化"""
+def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, progress_cb=None):
+    """整合生成流程 - 修复版本"""
     tmpdir = tempfile.mkdtemp(prefix="gen_")
     try:
-        W,H = video_params.get("resolution",(1280,720))
+        W,H = video_params.get("resolution",(1920,1080))  # 修复：默认分辨率改为1920x1080
         fps = video_params.get("fps",12)
         
         frame_files = []
         audios = []
+        total_steps = len(rows) * len(audio_segments) + 2  # +2 用于音频合并和视频合成
+        step = 0
         
-        # 第一步：批量生成所有音频
-        st.info("🎵 正在批量生成音频...")
-        tts_tasks = []
-        audio_task_map = {}  # 映射: (row_id, seg_idx) -> task_index
-        
-        task_idx = 0
         for rid in rows:
-            row = df.iloc[rid]
-            en = str(row.get("英语",""))
-            ph = str(row.get("音标",""))
-            cn = str(row.get("中文",""))
-            
-            for seg_idx, seg in enumerate(audio_segments):
-                text = en if seg["content"]=="英语" else (ph if seg["content"]=="音标" else cn)
-                tts_tasks.append((task_idx, text, seg["voice_category"], seg["voice_choice"], seg["speed"]))
-                audio_task_map[(rid, seg_idx)] = task_idx
-                task_idx += 1
-        
-        # 批量生成TTS
-        tts_results = batch_generate_tts(tts_tasks)
-        
-        if progress_cb:
-            progress_cb(0.3)
-        
-        # 第二步：处理每一行数据
-        st.info("🖼️ 正在生成视频帧和音频...")
-        total_rows = len(rows)
-        
-        for row_idx, rid in enumerate(rows):
             row = df.iloc[rid]
             en = str(row.get("英语",""))
             ph = str(row.get("音标",""))
@@ -1673,26 +1617,26 @@ def generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, vide
             # 渲染当前单词的画面
             img = render_frame(en, ph, cn, style_conf, (W,H))
             
-            # 音频生成 - 使用预生成的TTS结果
+            # 音频生成
             seg_paths = []
             total_audio_duration = 0
             
             for seg_idx, seg in enumerate(audio_segments):
-                task_idx = audio_task_map[(rid, seg_idx)]
-                audio_path, success = tts_results[task_idx]
+                text = en if seg["content"]=="英语" else (ph if seg["content"]=="音标" else cn)
+                out_mp3 = os.path.join(tmpdir, f"{rid}_{seg_idx}_{seg['content']}.mp3")
                 
-                if success and audio_path and os.path.exists(audio_path):
+                ok = generate_tts_cached(text, seg["voice_category"], seg["voice_choice"], seg["speed"], "在线优先", out_mp3)
+                if ok and os.path.exists(out_mp3):
                     # 获取实际音频时长
-                    audio_duration = get_audio_duration(audio_path)
+                    audio_duration = get_audio_duration(out_mp3)
                     total_audio_duration += audio_duration
-                    seg_paths.append(audio_path)
+                    seg_paths.append(out_mp3)
                 else:
                     # 如果TTS失败，使用默认时长
                     default_duration = 3.0
                     total_audio_duration += default_duration
-                    silent_path = os.path.join(tmpdir, f"silent_{rid}_{seg_idx}.mp3")
-                    create_silent_mp3(silent_path, default_duration)
-                    seg_paths.append(silent_path)
+                    create_silent_mp3(out_mp3, default_duration)
+                    seg_paths.append(out_mp3)
                 
                 # 添加停顿
                 if seg.get("pause",0) > 0:
@@ -1700,7 +1644,11 @@ def generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, vide
                     create_silent_mp3(pause_path, seg["pause"])
                     total_audio_duration += seg["pause"]
                     seg_paths.append(pause_path)
-            
+                
+                step += 1
+                if progress_cb:
+                    progress_cb(step/total_steps)
+
             # 合并当前行的音频
             if seg_paths:
                 merged_audio = os.path.join(tmpdir, f"{rid}_merged.mp3")
@@ -1723,19 +1671,13 @@ def generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, vide
                         fname = os.path.join(tmpdir, f"{rid}_{i:04d}.png")
                         img.save(fname)
                         frame_files.append(fname)
-            
-            # 更新进度
-            if progress_cb:
-                progress = 0.3 + (row_idx / total_rows) * 0.4
-                progress_cb(progress)
 
         # 检查是否有足够的帧
         if not frame_files:
             st.error("没有生成任何帧，无法合成视频")
             return None
             
-        # 第三步：合成视频
-        st.info("🎬 正在合成视频...")
+        # 合成视频（无音频）
         list_txt = os.path.join(tmpdir, "imgs.txt")
         with open(list_txt, "w", encoding="utf-8") as f:
             for p in frame_files:
@@ -1756,11 +1698,7 @@ def generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, vide
             st.error(f"视频合成失败: {e}")
             return None
         
-        if progress_cb:
-            progress_cb(0.8)
-        
-        # 第四步：合并音频
-        st.info("🔊 正在合并音频...")
+        # 合并所有音频
         if audios:
             final_audio = os.path.join(tmpdir, "final_audio.mp3")
             try:
@@ -1783,11 +1721,8 @@ def generate_video_pipeline_optimized(df, rows, style_conf, audio_segments, vide
         else:
             out_video = video_no_audio
         
-        if progress_cb:
-            progress_cb(1.0)
-        
         if os.path.exists(out_video):
-            # 将视频文件复制到永久位置
+            # 关键修复：将视频文件复制到永久位置
             permanent_video_path = os.path.join(CACHE_DIR, f"generated_video_{int(time.time())}.mp4")
             try:
                 shutil.copy2(out_video, permanent_video_path)
@@ -1850,79 +1785,38 @@ if not ffmpeg_available():
         ```
         """)
 
-# 视频质量设置
-st.markdown("### 🎯 视频质量设置")
-quality_col1, quality_col2, quality_col3 = st.columns(3)
-
-with quality_col1:
-    resolution = st.selectbox(
-        "视频分辨率",
-        ["640x360", "854x480", "1280x720", "1920x1080"],
-        index=2,
-        help="较低分辨率生成更快，但画质较差"
-    )
-
-with quality_col2:
-    fps = st.selectbox(
-        "帧率 (FPS)",
-        [8, 12, 24, 30],
-        index=1,
-        help="较低帧率生成更快，但流畅度较差"
-    )
-
-with quality_col3:
-    quality_preset = st.selectbox(
-        "生成速度优化",
-        ["标准模式", "快速模式", "极速模式"],
-        index=1,
-        help="快速模式会牺牲一些质量来提升生成速度"
-    )
-
-# 解析分辨率
-res_map = {
-    "640x360": (640, 360),
-    "854x480": (854, 480), 
-    "1280x720": (1280, 720),
-    "1920x1080": (1920, 1080)
-}
-
-# 根据质量预设调整参数
-if quality_preset == "快速模式":
-    fps = min(fps, 12)  # 限制帧率
-    if resolution == "1920x1080":
-        resolution = "1280x720"  # 降低分辨率
-elif quality_preset == "极速模式":
-    fps = 8
-    resolution = "854x480"
-
-video_params = {
-    "resolution": res_map[resolution],
-    "fps": fps
-}
-
 # 在生成视频部分使用 audio_segments
 if uploaded is not None and df is not None:
     total = len(df)
     
-    # 默认选择所有行（按顺序）
-    default_rows = list(range(min(total, 10)))  # 默认选择前10行或全部（如果少于10行）
+    # 修复：默认选择所有行
+    default_rows = list(range(total))  # 选择所有行
     
     rows = st.multiselect(
         "选择生成的行", 
         options=list(range(total)), 
         format_func=lambda i: f"{i+1} - {df.iloc[i]['英语'][:30]}...", 
-        default=default_rows
+        default=default_rows  # 修复：默认选择所有行
     )
     
-    # 显示预估时间
-    if rows:
-        estimated_time = len(rows) * len(st.session_state.audio_segments) * 2  # 每段音频约2秒
-        if quality_preset == "快速模式":
-            estimated_time = estimated_time * 0.7
-        elif quality_preset == "极速模式":
-            estimated_time = estimated_time * 0.5
-            
-        st.info(f"⏱️ 预估生成时间: {estimated_time:.0f}秒 (使用{quality_preset})")
+    # 修复：添加视频分辨率设置
+    st.markdown("### 视频质量设置")
+    
+    # 视频分辨率选择
+    resolution_options = {
+        "1920x1080 (全高清)": (1920, 1080),
+        "1280x720 (高清)": (1280, 720),
+        "854x480 (标清)": (854, 480)
+    }
+    
+    selected_resolution = st.selectbox(
+        "视频分辨率",
+        options=list(resolution_options.keys()),
+        index=0,  # 默认选择1920x1080
+        key="video_resolution"
+    )
+    
+    video_resolution = resolution_options[selected_resolution]
     
     if rows:
         if st.button("▶️ 开始生成视频", width='stretch', disabled=not ffmpeg_available()):
@@ -1946,19 +1840,15 @@ if uploaded is not None and df is not None:
                 progress.progress(p)
                 status.text(f"进度: {int(p*100)}%")
             
+            # 修复：使用用户选择的视频分辨率
+            params = {"resolution": video_resolution, "fps": 12}
             status.text("生成中...")
             
             try:
-                # 使用优化后的生成函数
-                outp = generate_video_pipeline_optimized(df, rows, style_conf, st.session_state.audio_segments, video_params, progress_cb=cb)
+                outp = generate_video_pipeline(df, rows, style_conf, st.session_state.audio_segments, params, progress_cb=cb)
                 
                 if outp and os.path.exists(outp):
                     st.success("✅ 视频生成完成")
-                    
-                    # 显示视频信息
-                    video_size = os.path.getsize(outp) / (1024 * 1024)  # MB
-                    st.info(f"视频信息: {resolution} @ {fps}fps, 大小: {video_size:.1f}MB")
-                    
                     with open(outp,"rb") as f:
                         st.video(f.read())
                     with open(outp,"rb") as f:
@@ -1979,7 +1869,7 @@ st.sidebar.header("📦 模板与任务")
 templates = load_templates()
 if st.sidebar.button("保存当前配置为模板", width='stretch'):
     name = f"模板_{time.strftime('%H%M%S')}"
-    save_template(name, style_conf, st.session_state.audio_segments, {"resolution":(1280,720),"fps":12})
+    save_template(name, style_conf, st.session_state.audio_segments, {"resolution":(1920,1080),"fps":12})  # 修复：默认分辨率改为1920x1080
     st.sidebar.success(f"已保存模板 {name}")
 if templates:
     st.sidebar.subheader("已保存的模板")
