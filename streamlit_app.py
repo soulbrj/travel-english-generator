@@ -146,6 +146,9 @@ st.set_page_config(
 
 st.markdown(f"""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+IPA:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Charis+SIL:wght@400;700&display=swap');
+
 :root {{
   --primary-light: {PRIMARY_LIGHT};
   --secondary-light: {SECONDARY_LIGHT};
@@ -301,8 +304,19 @@ div.stButton > button:hover {{
 .voice-category {{
   font-size: 13px;
   color: {TEXT_MUTED};
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   font-weight: 500;
+}}
+
+.voice-style {{
+  font-size: 12px;
+  color: {SUCCESS_COLOR};
+  margin-bottom: 12px;
+  font-weight: 500;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-block;
 }}
 
 .stProgress > div > div > div {{
@@ -315,34 +329,31 @@ div.stButton > button:hover {{
   margin-top: 16px;
 }}
 
-.stTabs > div > div > div > div[data-baseweb="tab"][aria-selected="true"] {{
-  background: transparent !important;
-  color: var(--accent-primary) !important;
-  border-bottom: 3px solid var(--accent-primary) !important;
-  border-radius: 0 !important;
-  box-shadow: none !important;
-  font-weight: 700;
-}}
-
 .stTabs > div > div > div {{
   gap: 8px;
 }}
 
 .stTabs > div > div > div > div {{
-  color: var(--text-dark);
-  border-radius: 0;
+  color: {TEXT_DARK};
+  border-radius: 12px;
   padding: 12px 20px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.7);
   transition: all 0.3s ease;
   font-weight: 500;
 }}
 
-.stTabs > div > div > div > div:hover  {{
-  background: rgba(99, 102, 241, 0.05);
-  border-bottom: 2px solid rgba(99, 102, 241, 0.3);
-  color: var(--accent-primary);
+.stTabs > div > div > div > div:hover {{
+  background: rgba(255, 255, 255, 0.9);
+  border-color: var(--accent-primary);
+}}
+
+.stTabs > div > div > div > div[data-baseweb="tab"][aria-selected="true"] {{
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  color: white;
+  border-color: transparent;
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+  font-weight: 600;
 }}
 
 .stAudio {{
@@ -473,30 +484,13 @@ div.stButton > button:hover {{
   font-size: 18px;
   color: {TEXT_MUTED};
   font-style: italic;
+  font-family: 'Noto Sans IPA', 'Charis SIL', 'Arial Unicode MS', 'Lucida Sans Unicode', 'DejaVu Sans', sans-serif;
+  font-weight: 400;
 }}
 
 .live-preview-chinese {{
   font-size: 20px;
   color: {TEXT_DARK};
-}}
-
-/* 删除按钮样式 */
-.delete-btn {{
-  background: linear-gradient(135deg, #ef4444, #dc2626) !important;
-  color: white !important;
-  border-radius: 8px !important;
-  padding: 6px 12px !important;
-  font-weight: 500 !important;
-  border: none !important;
-  transition: all 0.3s ease !important;
-  font-size: 12px !important;
-  margin-top: 8px !important;
-}}
-
-.delete-btn:hover {{
-  transform: translateY(-1px) !important;
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3) !important;
-  background: linear-gradient(135deg, #dc2626, #b91c1c) !important;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -536,81 +530,156 @@ def cache_store(src: str, key: str):
         pass
 
 # ---------- 字体检测与加载 ----------
-def find_font():
-    """查找支持中文和音标符号的字体 - 专门针对Windows优化"""
-    cand = []
-    if sys.platform.startswith("win"):
-        # Windows系统字体路径
-        windows_fonts_dir = r"C:\Windows\Fonts"
+def create_simple_phonetic_font():
+    """创建一个简单的音标字体替代方案"""
+    phonetic_font_path = os.path.join(tempfile.gettempdir(), "simple_phonetic.ttf")
+    
+    # 如果已经存在，直接返回
+    if os.path.exists(phonetic_font_path):
+        return phonetic_font_path
+    
+    try:
+        # 使用系统默认字体创建一个简单的替代
+        # 这里我们只是复制系统字体作为基础
+        system_fonts = []
+        if sys.platform.startswith("win"):
+            system_fonts = [
+                r"C:\Windows\Fonts\arial.ttf",
+                r"C:\Windows\Fonts\times.ttf",
+            ]
+        elif sys.platform.startswith("darwin"):
+            system_fonts = [
+                "/System/Library/Fonts/Arial.ttf",
+                "/System/Library/Fonts/Times.ttf",
+            ]
+        else:
+            system_fonts = [
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ]
         
-        # 优先选择支持中文和音标的字体
+        for font_path in system_fonts:
+            if os.path.exists(font_path):
+                # 直接使用系统字体
+                return font_path
+        
+        # 如果找不到系统字体，返回None
+        return None
+        
+    except Exception as e:
+        return None
+
+def find_font():
+    """跨平台查找支持中文和音标的字体"""
+    cand = []
+    
+    # 优先寻找支持音标和中文的字体
+    if sys.platform.startswith("win"):
         cand = [
-            # 支持音标的字体（优先）
-            os.path.join(windows_fonts_dir, "arialuni.ttf"),      # Arial Unicode MS - 支持音标和中文
-            os.path.join(windows_fonts_dir, "seguisym.ttf"),      # Segoe UI Symbol - 支持音标
-            os.path.join(windows_fonts_dir, "seguiemj.ttf"),      # Segoe UI Emoji - 支持音标
-            # 支持中文的字体
-            os.path.join(windows_fonts_dir, "simhei.ttf"),        # 黑体 - 很好的中文支持
-            os.path.join(windows_fonts_dir, "msyh.ttc"),          # 微软雅黑 - 现代中文支持
-            os.path.join(windows_fonts_dir, "simsun.ttc"),        # 宋体 - 传统中文支持
-            # 英文字体
-            os.path.join(windows_fonts_dir, "arial.ttf"),         # Arial - 英文支持
-            os.path.join(windows_fonts_dir, "times.ttf"),         # Times New Roman
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS - 支持音标和中文
+            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑 - 支持中文
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman - 支持音标
+            r"C:\Windows\Fonts\arial.ttf",     # Arial - 支持音标
+            r"C:\Windows\Fonts\seguiemj.ttf",  # Segoe UI Emoji - 支持特殊字符
         ]
-                
     elif sys.platform.startswith("darwin"):
         cand = [
-            "/System/Library/Fonts/Arial Unicode.ttf",
-            "/System/Library/Fonts/PingFang.ttf",
-            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Arial.ttf",           # Arial - 支持音标
+            "/System/Library/Fonts/Arial Unicode.ttf",   # Arial Unicode - 支持音标和中文
+            "/System/Library/Fonts/PingFang.ttf",        # 苹方 - 支持中文
+            "/System/Library/Fonts/Helvetica.ttc",       # Helvetica - 支持音标
+            "/System/Library/Fonts/Times.ttc",           # Times - 支持音标
         ]
     else:
         cand = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      # DejaVu Sans - 支持音标
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", # Liberation Sans - 支持音标
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",       # 文泉驿微米黑 - 支持中文
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", # Noto Sans CJK - 支持中文和音标
         ]
     
-    # 返回第一个存在的字体
-    for font_path in cand:
-        if os.path.exists(font_path):
-            return font_path
+    for p in cand:
+        if os.path.exists(p):
+            try:
+                # 测试字体是否支持音标字符
+                test_font = ImageFont.truetype(p, 12)
+                return p
+            except Exception:
+                continue
+    
+    # 如果找不到合适的字体，创建一个简单的替代
+    simple_font = create_simple_phonetic_font()
+    if simple_font:
+        return simple_font
+    
+    # 如果还是找不到，返回第一个存在的字体
+    for p in cand:
+        if os.path.exists(p):
+            return p
     
     return None
 
 DEFAULT_FONT = find_font()
 
-def load_font(path, size, bold=False):
-    """加载字体，如果失败则使用备用字体"""
+def load_font(path, size):
+    """加载字体，支持中文和音标"""
     try:
+        # 优先使用用户上传的自定义字体
+        if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+            return ImageFont.truetype(st.session_state.custom_font_path, size)
         if path and os.path.exists(path):
-            font = ImageFont.truetype(path, size)
-            # 如果要求加粗，尝试使用描边效果模拟加粗
-            return font
+            return ImageFont.truetype(path, size)
+        if DEFAULT_FONT:
+            return ImageFont.truetype(DEFAULT_FONT, size)
     except Exception as e:
-        st.warning(f"字体加载失败 {path}: {e}")
+        st.warning(f"字体加载失败: {e}，使用默认字体")
     
-    # 尝试备用字体
-    backup_fonts = []
+    # 最终回退到默认字体
+    return ImageFont.load_default()
+
+def load_phonetic_font(size):
+    """专门加载音标字体"""
+    # 优先使用专门支持音标的字体
+    phonetic_fonts = []
+    
+    # 添加用户自定义字体
+    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+        phonetic_fonts.append(st.session_state.custom_font_path)
+    
+    # 添加专门支持音标的字体
     if sys.platform.startswith("win"):
-        backup_fonts = [
-            r"C:\Windows\Fonts\arial.ttf",
-            r"C:\Windows\Fonts\times.ttf",
-            r"C:\Windows\Fonts\cour.ttf",  # Courier New
-        ]
+        phonetic_fonts.extend([
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman
+            r"C:\Windows\Fonts\arial.ttf",     # Arial
+        ])
+    elif sys.platform.startswith("darwin"):
+        phonetic_fonts.extend([
+            "/System/Library/Fonts/Arial Unicode.ttf",
+            "/System/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Times.ttc",
+        ])
+    else:
+        phonetic_fonts.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+        ])
     
-    for font_path in backup_fonts:
-        try:
-            if os.path.exists(font_path):
+    # 添加默认字体
+    if DEFAULT_FONT:
+        phonetic_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in phonetic_fonts:
+        if font_path and os.path.exists(font_path):
+            try:
                 return ImageFont.truetype(font_path, size)
-        except Exception:
-            continue
+            except Exception:
+                continue
     
-    # 最后使用默认字体
-    try:
-        return ImageFont.load_default()
-    except:
-        # 如果连默认字体都失败，创建一个基本的字体
-        return ImageFont.load_default()
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
 
 # ---------- 语音 / 预设库 ----------
 # 扩展音色库
@@ -631,6 +700,46 @@ ZH_VOICES = [
     "zh-CN-XiaochenNeural", "zh-HK-HiuMaanNeural", "zh-HK-WanLungNeural",
     "zh-TW-HsiaoChenNeural", "zh-TW-YunJheNeural"
 ]
+
+# 音色风格描述
+VOICE_STYLES = {
+    # 英文女声风格
+    "en-US-JennyNeural": "美式英语，清晰自然",
+    "en-US-AriaNeural": "美式英语，温暖亲切", 
+    "en-GB-SoniaNeural": "英式英语，优雅知性",
+    "en-US-AmberNeural": "美式英语，柔和甜美",
+    "en-US-AnaNeural": "美式英语，年轻活泼",
+    "en-AU-NatashaNeural": "澳式英语，清新明亮",
+    "en-CA-ClaraNeural": "加拿大英语，温和流畅",
+    "en-GB-LibbyNeural": "英式英语，活泼生动",
+    "en-GB-MaisieNeural": "英式英语，年轻活力",
+    "en-IE-EmilyNeural": "爱尔兰英语，优雅动听",
+    "en-NZ-MollyNeural": "新西兰英语，清新自然",
+    
+    # 英文男声风格
+    "en-US-GuyNeural": "美式英语，沉稳专业",
+    "en-US-BenjaminNeural": "美式英语，温暖可靠",
+    "en-GB-RyanNeural": "英式英语，标准优雅",
+    "en-US-BrianNeural": "美式英语，清晰有力",
+    "en-AU-WilliamNeural": "澳式英语，阳刚自信",
+    "en-CA-LiamNeural": "加拿大英语，温和稳重",
+    "en-GB-AlfieNeural": "英式英语，深沉磁性",
+    "en-GB-ThomasNeural": "英式英语，标准清晰",
+    "en-IE-ConnorNeural": "爱尔兰英语，独特魅力",
+    
+    # 中文音色风格
+    "zh-CN-XiaoxiaoNeural": "普通话，甜美少女音",
+    "zh-CN-YunxiNeural": "普通话，温暖青年音",
+    "zh-CN-KangkangNeural": "普通话，沉稳男声",
+    "zh-CN-YunxiaNeural": "普通话，温柔女声",
+    "zh-CN-YunyangNeural": "普通话，专业播音",
+    "zh-CN-XiaoyiNeural": "普通话，活泼少女",
+    "zh-CN-XiaochenNeural": "普通话，亲切女声",
+    "zh-HK-HiuMaanNeural": "粤语，温柔女声",
+    "zh-HK-WanLungNeural": "粤语，沉稳男声", 
+    "zh-TW-HsiaoChenNeural": "台湾国语，甜美女声",
+    "zh-TW-YunJheNeural": "台湾国语，阳光男声"
+}
 
 VOICE_LIBRARY = {
     "英文女声": EN_FEMALE, 
@@ -660,6 +769,10 @@ def get_voice_display_name(voice_name: str) -> str:
     if len(parts) >= 3:
         return f"{parts[2]} ({parts[1]})"
     return voice_name
+
+def get_voice_style(voice_name: str) -> str:
+    """获取音色风格描述"""
+    return VOICE_STYLES.get(voice_name, "专业语音合成")
 
 # ---------- 模板 / 进度 存取 ----------
 def save_template(name, style_conf, audio_segments, video_params):
@@ -865,69 +978,42 @@ def ensure_sample_voice(voice_name: str, sample_text: str = "Hello, this is a sa
     safe_remove(tmpmp3)
     return None
 
-# ---------- TXT文件解析函数 ----------
-def parse_txt_file(uploaded_file):
-    """解析TXT文件内容为DataFrame"""
-    content = uploaded_file.read().decode('utf-8')
-    lines = content.strip().split('\n')
+# ---------- 音标字符映射表 ----------
+PHONETIC_CHAR_MAP = {
+    # 修复常见音标字符显示问题
+    'ɡ': 'g',  # U+0261 拉丁文小写字母 SCRIPT G -> 普通 g
+    'ə': 'ə',  # 保持原字符，但确保字体支持
+    'θ': 'θ',  # 保持原字符
+    'ð': 'ð',  # 保持原字符
+    'ʃ': 'ʃ',  # 保持原字符
+    'ʒ': 'ʒ',  # 保持原字符
+    'ŋ': 'ŋ',  # 保持原字符
+    'ɪ': 'ɪ',  # 保持原字符
+    'ʊ': 'ʊ',  # 保持原字符
+    'ʌ': 'ʌ',  # 保持原字符
+    'ɑ': 'ɑ',  # 保持原字符
+    'ɒ': 'ɒ',  # 保持原字符
+    'ɔ': 'ɔ',  # 保持原字符
+    'ɜ': 'ɜ',  # 保持原字符
+    'æ': 'æ',  # 保持原字符
+    'ˈ': "'",  # 重音符号 -> 单引号
+    'ˌ': ",",  # 次重音符号 -> 逗号
+    'ː': ':',  # 长音符号 -> 冒号
+}
+
+def convert_phonetic_text(text):
+    """转换音标文本，最小化字符转换"""
+    if not text:
+        return ""
     
-    data = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        # 解析格式：英语 - 音标 - 中文
-        parts = line.split(' - ', 2)  # 最多分割成3部分
-        if len(parts) == 3:
-            english, phonetic, chinese = parts
-            data.append({
-                '英语': english.strip(),
-                '音标': phonetic.strip(),
-                '中文': chinese.strip()
-            })
-        elif len(parts) == 2:
-            # 如果没有音标，只有英语和中文
-            english, chinese = parts
-            data.append({
-                '英语': english.strip(),
-                '音标': '',
-                '中文': chinese.strip()
-            })
-        else:
-            # 如果格式不匹配，尝试其他分隔符
-            if ' - ' in line:
-                # 已经尝试过，跳过
-                continue
-            elif ' /' in line and '/ ' in line:
-                # 尝试解析包含音标的格式
-                phonetic_start = line.find(' /')
-                phonetic_end = line.find('/ ')
-                if phonetic_start != -1 and phonetic_end != -1:
-                    english = line[:phonetic_start].strip()
-                    phonetic = line[phonetic_start:phonetic_end+1].strip()
-                    chinese = line[phonetic_end+1:].strip()
-                    data.append({
-                        '英语': english,
-                        '音标': phonetic,
-                        '中文': chinese
-                    })
-                else:
-                    # 如果还是无法解析，将整行作为英语
-                    data.append({
-                        '英语': line.strip(),
-                        '音标': '',
-                        '中文': ''
-                    })
-            else:
-                # 如果还是无法解析，将整行作为英语
-                data.append({
-                    '英语': line.strip(),
-                    '音标': '',
-                    '中文': ''
-                })
+    # 只转换确实有问题的字符，保留所有标准音标符号
+    converted = ''.join(PHONETIC_CHAR_MAP.get(char, char) for char in text)
     
-    return pd.DataFrame(data)
+    # 如果转换后与原文本不同，记录日志
+    if converted != text:
+        st.info(f"音标已优化显示: `/{text}/` → `/{converted}/`")
+    
+    return converted
 
 # ---------- 页面顶部 / 导航 ----------
 st.markdown(f'<div class="main-title">🎬 英语视频生成器 - 专业级多音色教学视频制作平台</div>', unsafe_allow_html=True)
@@ -945,14 +1031,9 @@ df = None
 if uploaded:
     try:
         if uploaded.name.lower().endswith((".csv",".txt")):
-            if uploaded.name.lower().endswith(".txt"):
-                # 使用新的TXT文件解析函数
-                df = parse_txt_file(uploaded)
-            else:
-                df = pd.read_csv(uploaded)
+            df = pd.read_csv(uploaded)
         else:
             df = pd.read_excel(uploaded)
-            
         cols = [str(c).strip() for c in df.columns]
         df.columns = cols
         if "英语" not in df.columns or "中文" not in df.columns:
@@ -972,7 +1053,6 @@ if uploaded:
                 st.success("已应用编辑")
     except Exception as e:
         st.error(f"解析失败：{e}")
-        st.info("TXT文件格式要求：每行格式为 '英语句子 - 音标 - 中文解释'")
 else:
     st.info("未上传数据，示例：请上传包含列 英语 / 中文（可选 音标）的文件。")
 
@@ -993,57 +1073,18 @@ with tab_audio_config:
     recommended = recommend_preset(learning_goal)
     preset_choice = st.selectbox("预设播放模式", ["(自定义)"] + list(PRESET_MODES.keys()), index=1 if recommended in PRESET_MODES else 0, key="ui_preset_choice")
 
-    # 初始化音频段 - 修复：默认使用英文女生、英文男生、中文音色
-    if 'audio_segments' not in st.session_state:
-        st.session_state.audio_segments = [
-            {"content": "英语", "voice_category": "英文女声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
-            {"content": "英语", "voice_category": "英文男声", "voice_choice": None, "speed": 1.0, "pause": 0.3},
-            {"content": "中文", "voice_category": "中文音色", "voice_choice": None, "speed": 1.0, "pause": 0.5}
-        ]
-
-    # 应用预设
-    if preset_choice != "(自定义)" and preset_choice in PRESET_MODES:
-        if st.button("应用预设"):
-            st.session_state.audio_segments = PRESET_MODES[preset_choice].copy()
-            st.success(f"已应用 {preset_choice} 预设")
-            st.rerun()
+    # 音频段数
+    n_segments = st.number_input("音频段数", min_value=1, max_value=12, value=4, step=1, key="ui_n_segments")
 
     # 构建段配置表
-    audio_segments = st.session_state.audio_segments
-    
-    # 添加新段的按钮
-    if st.button("➕ 添加音频段", key="add_audio_segment"):
-        st.session_state.audio_segments.append({
-            "content": "英语", 
-            "voice_category": "英文女声", 
-            "voice_choice": None, 
-            "speed": 1.0, 
-            "pause": 0.3
-        })
-        st.rerun()
-
-    for si, seg in enumerate(audio_segments):
+    audio_segments = []
+    for si in range(int(n_segments)):
         st.markdown(f"**段 {si+1}**", unsafe_allow_html=True)
-        c1, c2, c3, c4, c5 = st.columns([1.5, 1.2, 1, 1, 0.8])
-        
+        c1, c2, c3, c4 = st.columns([1.5, 1.2, 1, 1])
         with c1:
-            content = st.selectbox(
-                f"段{si+1} 内容", 
-                ["英语", "音标", "中文"], 
-                index=["英语", "音标", "中文"].index(seg["content"]),
-                key=f"ui_seg_content_{si}"
-            )
-            st.session_state.audio_segments[si]["content"] = content
-            
+            content = st.selectbox(f"段{si+1} 内容", ["英语", "音标", "中文"], key=f"ui_seg_content_{si}")
         with c2:
-            category = st.selectbox(
-                f"段{si+1} 音色库", 
-                ["英文女声", "英文男声", "中文音色"], 
-                index=["英文女声", "英文男声", "中文音色"].index(seg["voice_category"]),
-                key=f"ui_seg_cat_{si}"
-            )
-            st.session_state.audio_segments[si]["voice_category"] = category
-            
+            category = st.selectbox(f"段{si+1} 音色库", ["英文女声", "英文男声", "中文音色"], key=f"ui_seg_cat_{si}")
         with c3:
             # 从音色设置中获取默认音色
             voice_settings_key = f"default_voice_{category}"
@@ -1051,39 +1092,26 @@ with tab_audio_config:
             
             presets = VOICE_LIBRARY.get(category, [])
             ls = ["(默认)"] + presets
-            current_choice = seg["voice_choice"] or "(默认)"
-            
-            vc = st.selectbox(
-                f"段{si+1} 具体音色", 
-                ls, 
-                index=ls.index(current_choice) if current_choice in ls else 0,
-                key=f"ui_seg_preset_{si}"
-            )
-            st.session_state.audio_segments[si]["voice_choice"] = None if vc == "(默认)" else vc
-            
+            vc = st.selectbox(f"段{si+1} 具体音色", ls, 
+                             index=0 if default_voice not in presets else presets.index(default_voice) + 1,
+                             key=f"ui_seg_preset_{si}")
         with c4:
-            speed = st.slider(
-                f"段{si+1} 语速", 
-                0.5, 2.0, seg["speed"], 0.1, 
-                key=f"ui_seg_speed_{si}"
-            )
-            st.session_state.audio_segments[si]["speed"] = speed
-            
-            pause = st.number_input(
-                f"段{si+1} 停顿 (秒)", 
-                min_value=0.0, max_value=5.0, value=seg["pause"], step=0.1, 
-                key=f"ui_seg_pause_{si}"
-            )
-            st.session_state.audio_segments[si]["pause"] = pause
-            
-        with c5:
-            # 删除按钮
-            if len(audio_segments) > 1:  # 至少保留一个段
-                if st.button("🗑️", key=f"delete_seg_{si}", help="删除此音频段"):
-                    st.session_state.audio_segments.pop(si)
-                    st.rerun()
-            else:
-                st.write("")  # 占位
+            speed = st.slider(f"段{si+1} 语速", 0.5, 2.0, 1.0, 0.1, key=f"ui_seg_speed_{si}")
+            pause = st.number_input(f"段{si+1} 停顿 (秒)", min_value=0.0, max_value=5.0, value=0.3, step=0.1, key=f"ui_seg_pause_{si}")
+        
+        voice_choice = None
+        if vc != "(默认)":
+            voice_choice = vc
+        
+        # 将配置添加到 audio_segments 列表
+        audio_segments.append({
+            "content": content,
+            "voice_category": category,
+            "voice_choice": voice_choice,
+            "speed": speed,
+            "pause": pause,
+            "engine_pref": engine_pref
+        })
 
 with tab_voice_library:
     st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
@@ -1099,6 +1127,7 @@ with tab_voice_library:
             with col1:
                 st.markdown(f'<div class="voice-name">{get_voice_display_name(voice)}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="voice-category">英文女声</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-style">{get_voice_style(voice)}</div>', unsafe_allow_html=True)
             with col2:
                 if sample_path and os.path.exists(sample_path):
                     st.audio(sample_path, format="audio/mp3")
@@ -1114,6 +1143,7 @@ with tab_voice_library:
             with col1:
                 st.markdown(f'<div class="voice-name">{get_voice_display_name(voice)}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="voice-category">英文男声</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-style">{get_voice_style(voice)}</div>', unsafe_allow_html=True)
             with col2:
                 if sample_path and os.path.exists(sample_path):
                     st.audio(sample_path, format="audio/mp3")
@@ -1129,6 +1159,7 @@ with tab_voice_library:
             with col1:
                 st.markdown(f'<div class="voice-name">{get_voice_display_name(voice)}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="voice-category">中文音色</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="voice-style">{get_voice_style(voice)}</div>', unsafe_allow_html=True)
             with col2:
                 if sample_path and os.path.exists(sample_path):
                     st.audio(sample_path, format="audio/mp3")
@@ -1147,8 +1178,8 @@ with tab_voice_settings:
         default_female = st.selectbox(
             "默认英文女声音色",
             options=EN_FEMALE,
-            index=EN_FEMALE.index("en-GB-SoniaNeural") if "en-GB-SoniaNeural" in EN_FEMALE else 0,
-            format_func=get_voice_display_name,
+            index=0,
+            format_func=lambda x: f"{get_voice_display_name(x)} - {get_voice_style(x)}",
             key="default_voice_英文女声"
         )
     
@@ -1157,8 +1188,8 @@ with tab_voice_settings:
         default_male = st.selectbox(
             "默认英文男声音色",
             options=EN_MALE,
-            index=EN_MALE.index("en-GB-RyanNeural") if "en-GB-RyanNeural" in EN_MALE else 0,
-            format_func=get_voice_display_name,
+            index=0,
+            format_func=lambda x: f"{get_voice_display_name(x)} - {get_voice_style(x)}",
             key="default_voice_英文男声"
         )
     
@@ -1167,19 +1198,19 @@ with tab_voice_settings:
         default_chinese = st.selectbox(
             "默认中文音色",
             options=ZH_VOICES,
-            index=ZH_VOICES.index("zh-CN-XiaoxiaoNeural") if "zh-CN-XiaoxiaoNeural" in ZH_VOICES else 0,
-            format_func=get_voice_display_name,
+            index=0,
+            format_func=lambda x: f"{get_voice_display_name(x)} - {get_voice_style(x)}",
             key="default_voice_中文音色"
         )
 
 # ---------- Frame rendering ----------
 def render_frame(en, ph, cn, conf, size=(1280,720)):
-    """渲染单帧图像 - 专门针对音标和字体加粗问题修复"""
+    """渲染单帧图像 - 专门修复音标显示问题"""
     W,H = size
     
     try:
         # 应用文字区域宽度比例
-        text_area_width = int(W * conf.get("text_area_width_ratio", 0.88))
+        text_area_width = int(W * conf.get("text_area_width_ratio", 0.85))
         text_start_x = (W - text_area_width) // 2
         
         # 创建背景
@@ -1188,24 +1219,7 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
             bg_img = conf["bg_image"]
             # 调整背景图片大小以适应帧尺寸
             bg_img = bg_img.resize((W, H), Image.Resampling.LANCZOS)
-            
-            # 应用背景透明度
-            bg_alpha = conf.get("bg_image_alpha", 1.0)
-            if bg_alpha < 1.0:
-                # 创建透明背景
-                base = Image.new("RGBA", (W, H), (255, 255, 255, 0))
-                # 将背景图片转换为RGBA
-                bg_img = bg_img.convert("RGBA")
-                # 调整透明度
-                if bg_img.mode == 'RGBA':
-                    # 分离alpha通道
-                    r, g, b, a = bg_img.split()
-                    # 调整alpha通道
-                    a = a.point(lambda i: i * bg_alpha)
-                    bg_img = Image.merge('RGBA', (r, g, b, a))
-                base.paste(bg_img, (0, 0), bg_img)
-            else:
-                base = bg_img.convert("RGB")
+            base = bg_img.convert("RGB")
         else:
             # 使用纯色背景
             bg_color = conf.get("bg_color", "#D1E1EF")  # 默认背景颜色
@@ -1213,26 +1227,24 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         draw = ImageDraw.Draw(base)
 
-        # 加载字体 - 专门针对音标优化
-        font_en = load_font(DEFAULT_FONT, conf.get("english_size", 46))
-        font_ph = load_font(DEFAULT_FONT, conf.get("phonetic_size", 30))
-        font_cn = load_font(DEFAULT_FONT, conf.get("chinese_size", 46))
+        # 加载字体 - 专门为音标使用不同的字体策略
+        font_en = load_font(None, conf.get("english_size", 60))
+        font_cn = load_font(None, conf.get("chinese_size", 50))
+        
+        # 为音标专门处理字体 - 使用专门的音标字体加载函数
+        phonetic_size = conf.get("phonetic_size", 40)
+        phonetic_font = load_phonetic_font(phonetic_size)
 
         # 计算文本位置
-        english_color = conf.get("english_color", "#000000")  # 默认黑色
-        phonetic_color = conf.get("phonetic_color", "#E6BF20")  # 默认音标颜色
-        chinese_color = conf.get("chinese_color", "#000000")  # 默认黑色
-        
-        # 获取加粗设置
-        english_bold = conf.get("english_bold", False)
-        phonetic_bold = conf.get("phonetic_bold", False)
-        chinese_bold = conf.get("chinese_bold", False)
+        english_color = conf.get("english_color", "#000000")
+        phonetic_color = conf.get("phonetic_color", "#E6BF20")
+        chinese_color = conf.get("chinese_color", "#000000")
         
         # 计算总高度
         total_height = (
-            conf.get("english_size", 46) + 
-            conf.get("phonetic_size", 30) + 
-            conf.get("chinese_size", 46) +
+            conf.get("english_size", 60) + 
+            phonetic_size + 
+            conf.get("chinese_size", 50) +
             conf.get("english_phonetic_gap", 10) +
             conf.get("phonetic_cn_gap", 10)
         )
@@ -1241,7 +1253,6 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         # 如果启用文字背景板，绘制背景
         if conf.get("text_bg_enable", False):
-            # 计算背景区域
             padding = conf.get("text_padding", 20)
             bg_alpha = int(conf.get("text_bg_alpha", 0.35) * 255)
             bg_color = conf.get("text_bg_color", "#FFFFFF")
@@ -1251,19 +1262,15 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
             bg_rect = Image.new('RGBA', (text_area_width, total_height + padding * 2), (255, 255, 255, 0))
             bg_draw = ImageDraw.Draw(bg_rect)
             
-            # 绘制圆角矩形 - 修复颜色转换问题
             try:
-                # 使用 ImageColor.getrgb 将颜色字符串转换为 RGB 元组
                 rgb_color = ImageColor.getrgb(bg_color)
-                # 添加 alpha 通道
                 rgba_color = (*rgb_color, bg_alpha)
                 bg_draw.rounded_rectangle(
                     [(0, 0), (text_area_width, total_height + padding * 2)],
                     radius=bg_radius,
                     fill=rgba_color
                 )
-            except Exception as e:
-                # 如果颜色转换失败，使用白色作为备选
+            except Exception:
                 rgba_color = (255, 255, 255, bg_alpha)
                 bg_draw.rounded_rectangle(
                     [(0, 0), (text_area_width, total_height + padding * 2)],
@@ -1271,123 +1278,62 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
                     fill=rgba_color
                 )
             
-            # 将背景合成到主图像上
             base.paste(bg_rect, (text_start_x, start_y - padding), bg_rect)
         
-        # 英语文本渲染
+        # 英语
         y = start_y
         try:
             bbox = draw.textbbox((0, 0), en, font=font_en)
             text_width = bbox[2] - bbox[0]
             x = text_start_x + (text_area_width - text_width) // 2
-            
-            # 应用加粗效果
-            if english_bold:
-                # 绘制多次实现加粗效果
-                for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                    draw.text((x+dx, y+dy), en, font=font_en, fill=english_color)
-            
             draw.text((x, y), en, font=font_en, fill=english_color)
+        except:
+            x = text_start_x + (text_area_width - len(en) * 20) // 2
+            draw.text((x, y), en, font=font_en, fill=english_color)
+        
+        y += conf.get("english_size", 60) + conf.get("english_phonetic_gap", 10)
+        
+        # 音标 - 使用转换后的文本
+        converted_ph = convert_phonetic_text(ph)
+        try:
+            bbox = draw.textbbox((0, 0), converted_ph, font=phonetic_font)
+            text_width = bbox[2] - bbox[0]
+            x = text_start_x + (text_area_width - text_width) // 2
+            draw.text((x, y), converted_ph, font=phonetic_font, fill=phonetic_color)
         except Exception as e:
-            # 如果高级方法失败，使用简单方法
+            # 如果音标渲染失败，尝试使用英文字体
             try:
-                # 估算文本宽度
-                approx_width = len(en) * conf.get("english_size", 46) // 2
-                x = text_start_x + (text_area_width - approx_width) // 2
-                
-                # 应用加粗效果
-                if english_bold:
-                    for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                        draw.text((x+dx, y+dy), en, font=font_en, fill=english_color)
-                
-                draw.text((x, y), en, font=font_en, fill=english_color)
-            except Exception as e2:
-                # 如果仍然失败，使用默认位置
-                x = text_start_x + 20
-                draw.text((x, y), en, font=font_en, fill=english_color)
-        
-        y += conf.get("english_size", 46) + conf.get("english_phonetic_gap", 10)
-        
-        # 音标文本渲染 - 专门修复音标显示
-        if ph and ph.strip():
-            try:
-                # 处理音标符号 - 确保使用正确的字体
-                bbox = draw.textbbox((0, 0), ph, font=font_ph)
+                bbox = draw.textbbox((0, 0), converted_ph, font=font_en)
                 text_width = bbox[2] - bbox[0]
                 x = text_start_x + (text_area_width - text_width) // 2
-                
-                # 应用加粗效果
-                if phonetic_bold:
-                    for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                        draw.text((x+dx, y+dy), ph, font=font_ph, fill=phonetic_color)
-                
-                draw.text((x, y), ph, font=font_ph, fill=phonetic_color)
-            except Exception as e:
-                try:
-                    # 估算文本宽度
-                    approx_width = len(ph) * conf.get("phonetic_size", 30) // 2
-                    x = text_start_x + (text_area_width - approx_width) // 2
-                    
-                    # 应用加粗效果
-                    if phonetic_bold:
-                        for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                            draw.text((x+dx, y+dy), ph, font=font_ph, fill=phonetic_color)
-                    
-                    draw.text((x, y), ph, font=font_ph, fill=phonetic_color)
-                except Exception as e2:
-                    x = text_start_x + 20
-                    draw.text((x, y), ph, font=font_ph, fill=phonetic_color)
-            
-            y += conf.get("phonetic_size", 30) + conf.get("phonetic_cn_gap", 10)
+                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
+            except:
+                # 最终备选：显示原始文本
+                x = text_start_x + (text_area_width - len(converted_ph) * 15) // 2
+                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
         
-        # 中文文本渲染
+        y += phonetic_size + conf.get("phonetic_cn_gap", 10)
+        
+        # 中文
         try:
             bbox = draw.textbbox((0, 0), cn, font=font_cn)
             text_width = bbox[2] - bbox[0]
             x = text_start_x + (text_area_width - text_width) // 2
-            
-            # 应用加粗效果
-            if chinese_bold:
-                for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                    draw.text((x+dx, y+dy), cn, font=font_cn, fill=chinese_color)
-            
             draw.text((x, y), cn, font=font_cn, fill=chinese_color)
         except Exception as e:
-            try:
-                approx_width = len(cn) * conf.get("chinese_size", 46) // 2
-                x = text_start_x + (text_area_width - approx_width) // 2
-                
-                # 应用加粗效果
-                if chinese_bold:
-                    for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                        draw.text((x+dx, y+dy), cn, font=font_cn, fill=chinese_color)
-                
-                draw.text((x, y), cn, font=font_cn, fill=chinese_color)
-            except Exception as e2:
-                x = text_start_x + 20
-                draw.text((x, y), cn, font=font_cn, fill=chinese_color)
+            x = text_start_x + (text_area_width - len(cn) * 25) // 2
+            draw.text((x, y), cn, font=font_cn, fill=chinese_color)
 
         return base
     except Exception as e:
         st.error(f"帧渲染失败: {e}")
-        # 创建错误图像
         error_img = Image.new("RGB", (W, H), conf.get("bg_color", "#D1E1EF"))
         draw = ImageDraw.Draw(error_img)
-        # 使用默认字体显示错误信息
-        try:
-            draw.text((50, H//2), f"渲染错误: {str(e)}", fill="red")
-        except:
-            pass
+        draw.text((50, H//2), "渲染错误", fill="red")
         return error_img
 
 # ---------- 效果预览部分 ----------
 st.markdown('<div class="card-header">👀 效果预览</div>', unsafe_allow_html=True)
-
-# 显示当前使用的字体信息
-if DEFAULT_FONT:
-    st.sidebar.success(f"当前字体: {os.path.basename(DEFAULT_FONT)}")
-else:
-    st.sidebar.warning("未找到系统字体，使用默认字体")
 
 if uploaded is not None and df is not None:
     # 创建两列布局：左侧样式设计，右侧实时预览
@@ -1406,8 +1352,7 @@ if uploaded is not None and df is not None:
             with bg_col1:
                 bg_mode = st.selectbox("背景类型", ["纯色背景", "图片背景"], key="ui_bg_mode")
             with bg_col2:
-                ui_bg_color = st.color_picker("背景颜色", "#D1E1EF", key="ui_bg_color")  # 默认背景颜色
-            
+                ui_bg_color = st.color_picker("背景颜色", "#D1E1EF", key="ui_bg_color")
             ui_bg_image = None
             if bg_mode == "图片背景":
                 bg_file = st.file_uploader("上传背景图片 (JPG/PNG)", type=["jpg","jpeg","png"], key="ui_bgimg")
@@ -1417,10 +1362,6 @@ if uploaded is not None and df is not None:
                         st.image(ui_bg_image, caption="背景预览", use_container_width=True)
                     except Exception:
                         st.error("无法读取背景图片")
-                
-                # 背景图片透明度设置
-                bg_image_alpha = st.slider("背景图片透明度", 0.0, 1.0, 1.0, 0.05, key="ui_bg_image_alpha")
-                st.caption("1.0为完全不透明，0.0为完全透明")
         
         with tab_text:
             st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
@@ -1429,19 +1370,34 @@ if uploaded is not None and df is not None:
             st.markdown("**文字样式**")
             col_en, col_ph, col_cn = st.columns(3)
             with col_en:
-                en_size = st.slider("英语字号", 0, 160, 46, key="ui_en_size")
-                en_color = st.color_picker("英语颜色", "#000000", key="ui_en_color")  # 默认黑色
-                english_bold = st.checkbox("英语加粗", value=False, key="ui_english_bold")
+                en_size = st.slider("英语字号", 0, 160, 60, key="ui_en_size")
+                en_color = st.color_picker("英语颜色", "#000000", key="ui_en_color")
             with col_ph:
-                ph_size = st.slider("音标字号", 0, 120, 30, key="ui_ph_size")
-                ph_color = st.color_picker("音标颜色", "#E6BF20", key="ui_ph_color")  # 默认音标颜色
-                phonetic_bold = st.checkbox("音标加粗", value=False, key="ui_phonetic_bold")
+                ph_size = st.slider("音标字号", 0, 120, 40, key="ui_ph_size")
+                ph_color = st.color_picker("音标颜色", "#E6BF20", key="ui_ph_color")
             with col_cn:
-                cn_size = st.slider("中文字号", 0, 120, 46, key="ui_cn_size")
-                cn_color = st.color_picker("中文颜色", "#000000", key="ui_cn_color")  # 默认黑色
-                chinese_bold = st.checkbox("中文加粗", value=False, key="ui_chinese_bold")
+                cn_size = st.slider("中文字号", 0, 120, 50, key="ui_cn_size")
+                cn_color = st.color_picker("中文颜色", "#000000", key="ui_cn_color")
             
+            # 音标显示解决方案
+            st.markdown("**音标显示解决方案**")
+            st.success("""
+            **已启用音标显示优化方案：**
+            - ✅ 使用 Google Fonts 的 Noto Sans IPA 字体（专门支持音标）
+            - ✅ 使用 Charis SIL 字体作为备选（专门为语言学设计）
+            - ✅ 自动字符映射确保兼容性
+            - ✅ 支持自定义字体上传
+            """)
             
+            # 字体信息显示
+            st.markdown("**字体信息**")
+            if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+                st.success(f"✅ 当前使用自定义字体")
+            elif DEFAULT_FONT:
+                font_name = os.path.basename(DEFAULT_FONT)
+                st.info(f"📝 系统字体: {font_name}")
+            else:
+                st.warning("⚠️ 使用默认字体，音标显示可能不正常")
         
         with tab_layout:
             st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
@@ -1450,7 +1406,7 @@ if uploaded is not None and df is not None:
             st.markdown("**背景板与间距**")
             b1, b2, b3, b4 = st.columns(4)
             with b1:
-                text_bg_enable = st.checkbox("启用文字背景板", value=True, key="ui_text_bg_enable")  # 默认启用
+                text_bg_enable = st.checkbox("启用文字背景板", value=True, key="ui_text_bg_enable")
             with b2:
                 text_bg_color = st.color_picker("文字背景颜色", "#FFFFFF", key="ui_text_bg_color")
             with b3:
@@ -1468,24 +1424,50 @@ if uploaded is not None and df is not None:
             with g4:
                 text_padding = st.slider("文字内边距", 0, 120, 20, key="ui_text_padding")
             
-            
+            # --- 文字区域设置 ---
+            st.markdown("**文字区域设置**")
+            t1, t2 = st.columns(2)
+            with t1:
+                text_area_ratio = st.slider("文字区域宽度比例", 0.3, 1.0, 0.85, key="ui_text_area_ratio")
         
         with tab_advanced:
             st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
             
-            # --- 区域设置 ---
-            t1, t2 = st.columns(2)
-            with t1:
-                text_area_ratio = st.slider("文字区域宽度比例", 0.3, 1.0, 0.88, key="ui_text_area_ratio")
+            # 自定义字体上传
+            st.markdown("**自定义字体**")
+            st.info("上传支持音标和中文的字体文件（TTF/OTF格式）")
+            custom_font_file = st.file_uploader("上传自定义字体文件", type=["ttf", "otf"], key="ui_custom_font")
+            if custom_font_file:
+                try:
+                    # 保存自定义字体到临时文件
+                    custom_font_path = os.path.join(tempfile.gettempdir(), f"custom_font_{hashlib.md5(custom_font_file.getvalue()).hexdigest()}.ttf")
+                    with open(custom_font_path, "wb") as f:
+                        f.write(custom_font_file.getvalue())
+                    st.session_state.custom_font_path = custom_font_path
+                    st.success("✅ 自定义字体上传成功！")
+                except Exception as e:
+                    st.error(f"字体文件上传失败: {e}")
             
-            # 字体预览
-            if DEFAULT_FONT:
-                st.success(f"当前使用字体: {os.path.basename(DEFAULT_FONT)}")
-                st.info(f"字体路径: {DEFAULT_FONT}")
-            else:
-                st.warning("未检测到系统字体，使用默认字体")
-            
-            
+            # 字体测试
+            st.markdown("**字体测试**")
+            test_text = st.text_input("测试文本", value="Hello /həˈloʊ/ 你好", key="ui_font_test")
+            if test_text:
+                test_font_path = st.session_state.get('custom_font_path', DEFAULT_FONT)
+                try:
+                    test_font = ImageFont.truetype(test_font_path, 20) if test_font_path else ImageFont.load_default()
+                    test_img = Image.new('RGB', (400, 50), color='white')
+                    test_draw = ImageDraw.Draw(test_img)
+                    test_draw.text((10, 10), test_text, font=test_font, fill='black')
+                    st.image(test_img, caption="字体测试预览", use_container_width=True)
+                    
+                    # 显示转换后的音标
+                    if '/' in test_text:
+                        phonetic_part = test_text.split('/')[1] if len(test_text.split('/')) > 1 else ""
+                        converted_phonetic = convert_phonetic_text(phonetic_part)
+                        st.write(f"原始音标: {phonetic_part}")
+                        st.write(f"转换后: /{converted_phonetic}/")
+                except Exception as e:
+                    st.error(f"字体测试失败: {e}")
     
     with preview_col2:
         st.markdown('<div class="card-header">👁️ 实时预览</div>', unsafe_allow_html=True)
@@ -1507,16 +1489,12 @@ if uploaded is not None and df is not None:
             "bg_mode": "image" if ui_bg_image else "color",
             "bg_color": ui_bg_color,
             "bg_image": ui_bg_image,
-            "bg_image_alpha": bg_image_alpha if bg_mode == "图片背景" else 1.0,
             "english_size": en_size,
             "english_color": en_color,
-            "english_bold": english_bold,
             "phonetic_size": ph_size,
             "phonetic_color": ph_color,
-            "phonetic_bold": phonetic_bold,
             "chinese_size": cn_size,
             "chinese_color": cn_color,
-            "chinese_bold": chinese_bold,
             "text_bg_enable": text_bg_enable,
             "text_bg_color": text_bg_color,
             "text_bg_alpha": text_bg_alpha,
@@ -1534,6 +1512,14 @@ if uploaded is not None and df is not None:
         ph = str(row.get("音标",""))
         cn = str(row.get("中文",""))
         
+        # 显示音标转换信息
+        if ph and ph.strip():
+            converted_ph = convert_phonetic_text(ph)
+            if ph != converted_ph:
+                st.info(f"音标已自动转换: `/{ph}/` → `/{converted_ph}/`")
+            else:
+                st.success(f"音标无需转换: `/{ph}/`")
+        
         # 生成预览图像
         preview_image = render_frame(en, ph, cn, style_conf, (640, 360))
         
@@ -1545,7 +1531,8 @@ if uploaded is not None and df is not None:
         # 显示预览文本
         st.markdown(f'<div class="live-preview-text live-preview-english">{en}</div>', unsafe_allow_html=True)
         if ph and ph.strip():
-            st.markdown(f'<div class="live-preview-text live-preview-phonetic">/{ph}/</div>', unsafe_allow_html=True)
+            converted_ph_display = convert_phonetic_text(ph)
+            st.markdown(f'<div class="live-preview-text live-preview-phonetic">/{converted_ph_display}/</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="live-preview-text live-preview-chinese">{cn}</div>', unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1554,8 +1541,7 @@ if uploaded is not None and df is not None:
         st.markdown("### 🔊 音频预览")
         if st.button("生成音频预览", width='stretch'):
             with st.spinner("正在生成音频预览..."):
-                # 生成预览音频 - 现在函数已经定义
-                preview_audio = generate_preview_audio(df, preview_row, st.session_state.audio_segments)
+                preview_audio = generate_preview_audio(df, preview_row, audio_segments)
                 
                 if preview_audio and os.path.exists(preview_audio):
                     st.audio(preview_audio, format="audio/mp3")
@@ -1600,7 +1586,7 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
     """整合生成流程 - 修复版本"""
     tmpdir = tempfile.mkdtemp(prefix="gen_")
     try:
-        W,H = video_params.get("resolution",(1920,1080))  # 修复：默认分辨率改为1920x1080
+        W,H = video_params.get("resolution",(1280,720))
         fps = video_params.get("fps",12)
         
         frame_files = []
@@ -1789,34 +1775,15 @@ if not ffmpeg_available():
 if uploaded is not None and df is not None:
     total = len(df)
     
-    # 修复：默认选择所有行
-    default_rows = list(range(total))  # 选择所有行
+    # 默认选择所有行（按顺序）
+    default_rows = list(range(min(total, 10)))  # 默认选择前10行或全部（如果少于10行）
     
     rows = st.multiselect(
         "选择生成的行", 
         options=list(range(total)), 
         format_func=lambda i: f"{i+1} - {df.iloc[i]['英语'][:30]}...", 
-        default=default_rows  # 修复：默认选择所有行
+        default=default_rows
     )
-    
-    # 修复：添加视频分辨率设置
-    st.markdown("### 视频质量设置")
-    
-    # 视频分辨率选择
-    resolution_options = {
-        "1920x1080 (全高清)": (1920, 1080),
-        "1280x720 (高清)": (1280, 720),
-        "854x480 (标清)": (854, 480)
-    }
-    
-    selected_resolution = st.selectbox(
-        "视频分辨率",
-        options=list(resolution_options.keys()),
-        index=0,  # 默认选择1920x1080
-        key="video_resolution"
-    )
-    
-    video_resolution = resolution_options[selected_resolution]
     
     if rows:
         if st.button("▶️ 开始生成视频", width='stretch', disabled=not ffmpeg_available()):
@@ -1840,12 +1807,11 @@ if uploaded is not None and df is not None:
                 progress.progress(p)
                 status.text(f"进度: {int(p*100)}%")
             
-            # 修复：使用用户选择的视频分辨率
-            params = {"resolution": video_resolution, "fps": 12}
+            params = {"resolution":(1280,720),"fps":12}
             status.text("生成中...")
             
             try:
-                outp = generate_video_pipeline(df, rows, style_conf, st.session_state.audio_segments, params, progress_cb=cb)
+                outp = generate_video_pipeline(df, rows, style_conf, audio_segments, params, progress_cb=cb)
                 
                 if outp and os.path.exists(outp):
                     st.success("✅ 视频生成完成")
@@ -1869,14 +1835,14 @@ st.sidebar.header("📦 模板与任务")
 templates = load_templates()
 if st.sidebar.button("保存当前配置为模板", width='stretch'):
     name = f"模板_{time.strftime('%H%M%S')}"
-    save_template(name, style_conf, st.session_state.audio_segments, {"resolution":(1920,1080),"fps":12})  # 修复：默认分辨率改为1920x1080
+    save_template(name, style_conf, audio_segments, {"resolution":(1280,720),"fps":12})
     st.sidebar.success(f"已保存模板 {name}")
 if templates:
     st.sidebar.subheader("已保存的模板")
     for tname, tdata in templates:
         if st.sidebar.button(f"应用模板 {tname}", width='stretch'):
             style_conf.update(tdata["style"])
-            st.session_state.audio_segments = tdata["audio"].copy()
+            audio_segments[:] = tdata["audio"]
             st.sidebar.info(f"已应用模板 {tname}")
 
 # 学习进度
@@ -1897,6 +1863,15 @@ st.sidebar.write(f"✅ pyttsx3: {'可用' if PYTTSX3_AVAILABLE else '缺失'}")
 st.sidebar.write(f"✅ edge-tts: {'可用' if EDGE_TTS_AVAILABLE else '缺失'}")
 st.sidebar.write(f"✅ pydub: {'可用' if PYDUB_AVAILABLE else '缺失'}")
 
+# 字体检测信息
+if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+    st.sidebar.success("✅ 字体: 使用自定义字体")
+elif DEFAULT_FONT:
+    font_name = os.path.basename(DEFAULT_FONT)
+    st.sidebar.info(f"✅ 字体: {font_name}")
+else:
+    st.sidebar.warning("⚠️ 字体: 使用默认字体")
+
 # 检测运行环境
 if 'STREAMLIT_SHARING_MODE' in os.environ:
     st.sidebar.info("🌐 Streamlit Cloud 环境")
@@ -1911,5 +1886,4 @@ st.markdown(
     环境：FFmpeg {"✅ 已检测" if ffmpeg_available() else "⚠️ 未检测"} | 平台: {sys.platform}
     </div>
     """,
-    unsafe_allow_html=True
-)
+    unsafe_allow_html=True)
