@@ -125,6 +125,34 @@ def run_ffmpeg_command(cmd):
     except Exception as e:
         raise RuntimeError(f"FFmpeg execution error: {str(e)}")
 
+# ---------- 云端字体解决方案 ----------
+def get_cloud_font_path():
+    """获取云端环境可用的字体路径"""
+    # 在 Streamlit Cloud 上，我们可以使用系统字体或回退方案
+    cloud_font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    ]
+    
+    for font_path in cloud_font_paths:
+        if os.path.exists(font_path):
+            return font_path
+    
+    return None
+
+def create_fallback_font():
+    """创建备用字体方案"""
+    try:
+        # 尝试使用 PIL 的默认字体
+        return ImageFont.load_default()
+    except:
+        # 如果失败，创建一个简单的位图字体
+        return ImageFont.load_default()
+
 # ---------- 高级UI theme & CSS ----------
 PRIMARY_LIGHT = "#f8faff"
 SECONDARY_LIGHT = "#f0f4ff"
@@ -541,8 +569,12 @@ def create_simple_phonetic_font():
         return phonetic_font_path
     
     try:
-        # 使用系统默认字体创建一个简单的替代
-        # 这里我们只是复制系统字体作为基础
+        # 在云端环境，使用系统字体
+        cloud_font = get_cloud_font_path()
+        if cloud_font:
+            return cloud_font
+        
+        # 本地环境使用系统字体作为基础
         system_fonts = []
         if sys.platform.startswith("win"):
             system_fonts = [
@@ -562,17 +594,22 @@ def create_simple_phonetic_font():
         
         for font_path in system_fonts:
             if os.path.exists(font_path):
-                # 直接使用系统字体
                 return font_path
         
-        # 如果找不到系统字体，返回None
         return None
         
     except Exception as e:
         return None
 
 def find_font():
-    """跨平台查找支持中文和音标的字体"""
+    """跨平台查找支持中文和音标的字体 - 修复版本"""
+    # 首先检查云端环境
+    if 'STREAMLIT_SHARING_MODE' in os.environ:
+        cloud_font = get_cloud_font_path()
+        if cloud_font:
+            st.info(f"🌐 使用云端字体: {os.path.basename(cloud_font)}")
+            return cloud_font
+    
     cand = []
     
     # 优先寻找支持音标和中文的字体
@@ -624,7 +661,7 @@ def find_font():
 DEFAULT_FONT = find_font()
 
 def load_font(path, size):
-    """加载字体，支持中文和音标"""
+    """加载字体，支持中文和音标 - 修复版本"""
     try:
         # 优先使用用户上传的自定义字体
         if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
@@ -634,19 +671,28 @@ def load_font(path, size):
         if DEFAULT_FONT:
             return ImageFont.truetype(DEFAULT_FONT, size)
     except Exception as e:
-        st.warning(f"字体加载失败: {e}，使用默认字体")
+        st.warning(f"字体加载失败: {e}，使用备用字体")
     
     # 最终回退到默认字体
-    return ImageFont.load_default()
+    try:
+        return ImageFont.load_default()
+    except:
+        return create_fallback_font()
 
 def load_phonetic_font(size):
-    """专门加载音标字体"""
+    """专门加载音标字体 - 修复版本"""
     # 优先使用专门支持音标的字体
     phonetic_fonts = []
     
     # 添加用户自定义字体
     if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
         phonetic_fonts.append(st.session_state.custom_font_path)
+    
+    # 在云端环境使用云端字体
+    if 'STREAMLIT_SHARING_MODE' in os.environ:
+        cloud_font = get_cloud_font_path()
+        if cloud_font:
+            phonetic_fonts.append(cloud_font)
     
     # 添加专门支持音标的字体
     if sys.platform.startswith("win"):
@@ -936,6 +982,41 @@ def concat_audios_ffmpeg(audio_paths: List[str], out_mp3: str) -> None:
         raise RuntimeError("Audio concat failed: output file not created")
     
     safe_remove(listfile)
+
+# ---------- 获取音频时长（修复版本） ----------
+def get_audio_duration(audio_path: str) -> float:
+    """获取音频文件的时长（秒）- 修复版本"""
+    try:
+        # 优先使用 ffprobe，这在云端更可靠
+        ffmpeg_path = find_ffmpeg_path()
+        if ffmpeg_path:
+            # 构建 ffprobe 路径
+            if sys.platform.startswith("win"):
+                ffprobe_path = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe")
+            else:
+                ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+            
+            if os.path.exists(ffprobe_path):
+                cmd = [
+                    ffprobe_path, "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", audio_path
+                ]
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+                if result.returncode == 0:
+                    return float(result.stdout.strip())
+    except Exception as e:
+        pass
+    
+    # 备用方案：使用 pydub
+    try:
+        if PYDUB_AVAILABLE:
+            audio = AudioSegment.from_file(audio_path)
+            return len(audio) / 1000.0  # 转换为秒
+    except Exception as e:
+        pass
+    
+    # 最终备用方案：返回默认时长
+    return 3.0
 
 # ---------- 预览音频生成函数 ----------
 def generate_preview_audio(df, row_index, audio_segments):
@@ -1594,26 +1675,6 @@ if uploaded is not None and df is not None:
         
 else:
     st.warning("请先上传数据文件以启用预览功能")
-
-# ---------- 获取音频时长 ----------
-def get_audio_duration(audio_path: str) -> float:
-    """获取音频文件的时长（秒）"""
-    try:
-        if PYDUB_AVAILABLE:
-            audio = AudioSegment.from_file(audio_path)
-            return len(audio) / 1000.0  # 转换为秒
-        else:
-            # 备用方案：使用 ffprobe
-            ffprobe_path = find_ffmpeg_path().replace("ffmpeg", "ffprobe")
-            cmd = [
-                ffprobe_path, "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", audio_path
-            ]
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            return float(result.stdout.strip())
-    except Exception as e:
-        # 如果无法获取时长，返回默认值
-        return 3.0
 
 # ---------- 清除生成的视频文件 ----------
 def clear_generated_videos():
