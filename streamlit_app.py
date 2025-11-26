@@ -125,90 +125,6 @@ def run_ffmpeg_command(cmd):
     except Exception as e:
         raise RuntimeError(f"FFmpeg execution error: {str(e)}")
 
-# ---------- 云端字体解决方案 ----------
-def get_cloud_font_path():
-    """获取云端环境可用的字体路径"""
-    # 在 Streamlit Cloud 上，我们可以使用系统字体或回退方案
-    cloud_font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",  # 添加中文字体
-    ]
-    
-    for font_path in cloud_font_paths:
-        if os.path.exists(font_path):
-            return font_path
-    
-    return None
-
-def create_fallback_font():
-    """创建备用字体方案"""
-    try:
-        # 尝试使用 PIL 的默认字体
-        return ImageFont.load_default()
-    except:
-        # 如果失败，创建一个简单的位图字体
-        return ImageFont.load_default()
-
-# ---------- 改进的字体加载函数 ----------
-def load_font_with_fallback(size, prefer_chinese=False):
-    """加载字体，带有完善的备用方案"""
-    font_paths = []
-    
-    # 1. 优先使用用户自定义字体
-    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-        font_paths.append(st.session_state.custom_font_path)
-    
-    # 2. 云端环境字体
-    cloud_font = get_cloud_font_path()
-    if cloud_font:
-        font_paths.append(cloud_font)
-    
-    # 3. 专门的中文字体（如果优先中文）
-    if prefer_chinese:
-        chinese_fonts = [
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        ]
-        font_paths.extend(chinese_fonts)
-    
-    # 4. 通用字体
-    generic_fonts = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ]
-    font_paths.extend(generic_fonts)
-    
-    # 尝试加载字体
-    for font_path in font_paths:
-        if font_path and os.path.exists(font_path):
-            try:
-                return ImageFont.truetype(font_path, size)
-            except Exception as e:
-                continue
-    
-    # 最终回退方案
-    try:
-        return ImageFont.load_default()
-    except:
-        return create_fallback_font()
-
-def load_font(path, size):
-    """加载字体 - 修复版本"""
-    return load_font_with_fallback(size)
-
-def load_phonetic_font(size):
-    """加载音标字体 - 修复版本"""
-    return load_font_with_fallback(size)
-
-def load_chinese_font(size):
-    """专门加载中文字体"""
-    return load_font_with_fallback(size, prefer_chinese=True)
-
 # ---------- 高级UI theme & CSS ----------
 PRIMARY_LIGHT = "#f8faff"
 SECONDARY_LIGHT = "#f0f4ff"
@@ -625,12 +541,8 @@ def create_simple_phonetic_font():
         return phonetic_font_path
     
     try:
-        # 在云端环境，使用系统字体
-        cloud_font = get_cloud_font_path()
-        if cloud_font:
-            return cloud_font
-        
-        # 本地环境使用系统字体作为基础
+        # 使用系统默认字体创建一个简单的替代
+        # 这里我们只是复制系统字体作为基础
         system_fonts = []
         if sys.platform.startswith("win"):
             system_fonts = [
@@ -650,22 +562,17 @@ def create_simple_phonetic_font():
         
         for font_path in system_fonts:
             if os.path.exists(font_path):
+                # 直接使用系统字体
                 return font_path
         
+        # 如果找不到系统字体，返回None
         return None
         
     except Exception as e:
         return None
 
 def find_font():
-    """跨平台查找支持中文和音标的字体 - 修复版本"""
-    # 首先检查云端环境
-    if 'STREAMLIT_SHARING_MODE' in os.environ:
-        cloud_font = get_cloud_font_path()
-        if cloud_font:
-            st.info(f"🌐 使用云端字体: {os.path.basename(cloud_font)}")
-            return cloud_font
-    
+    """跨平台查找支持中文和音标的字体"""
     cand = []
     
     # 优先寻找支持音标和中文的字体
@@ -716,41 +623,65 @@ def find_font():
 
 DEFAULT_FONT = find_font()
 
-# ---------- 字体状态检查函数 ----------
-def check_font_status():
-    """检查字体状态并返回报告"""
-    status = {
-        "chinese_support": False,
-        "phonetic_support": False,
-        "custom_font": False,
-        "issues": []
-    }
-    
-    # 检查中文字体支持
+def load_font(path, size):
+    """加载字体，支持中文和音标"""
     try:
-        test_font = load_chinese_font(20)
-        test_img = Image.new('RGB', (200, 30), color='white')
-        test_draw = ImageDraw.Draw(test_img)
-        test_draw.text((10, 5), "中文测试", font=test_font, fill='black')
-        status["chinese_support"] = True
+        # 优先使用用户上传的自定义字体
+        if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+            return ImageFont.truetype(st.session_state.custom_font_path, size)
+        if path and os.path.exists(path):
+            return ImageFont.truetype(path, size)
+        if DEFAULT_FONT:
+            return ImageFont.truetype(DEFAULT_FONT, size)
     except Exception as e:
-        status["issues"].append(f"中文字体不支持: {str(e)}")
+        st.warning(f"字体加载失败: {e}，使用默认字体")
     
-    # 检查音标支持
-    try:
-        test_font = load_phonetic_font(20)
-        test_img = Image.new('RGB', (200, 30), color='white')
-        test_draw = ImageDraw.Draw(test_img)
-        test_draw.text((10, 5), "/həˈloʊ/", font=test_font, fill='black')
-        status["phonetic_support"] = True
-    except Exception as e:
-        status["issues"].append(f"音标字体不支持: {str(e)}")
+    # 最终回退到默认字体
+    return ImageFont.load_default()
+
+def load_phonetic_font(size):
+    """专门加载音标字体"""
+    # 优先使用专门支持音标的字体
+    phonetic_fonts = []
     
-    # 检查自定义字体
+    # 添加用户自定义字体
     if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-        status["custom_font"] = True
+        phonetic_fonts.append(st.session_state.custom_font_path)
     
-    return status
+    # 添加专门支持音标的字体
+    if sys.platform.startswith("win"):
+        phonetic_fonts.extend([
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman
+            r"C:\Windows\Fonts\arial.ttf",     # Arial
+        ])
+    elif sys.platform.startswith("darwin"):
+        phonetic_fonts.extend([
+            "/System/Library/Fonts/Arial Unicode.ttf",
+            "/System/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Times.ttc",
+        ])
+    else:
+        phonetic_fonts.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+        ])
+    
+    # 添加默认字体
+    if DEFAULT_FONT:
+        phonetic_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in phonetic_fonts:
+        if font_path and os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
+    
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
 
 # ---------- 语音 / 预设库 ----------
 # 扩展音色库
@@ -1006,41 +937,6 @@ def concat_audios_ffmpeg(audio_paths: List[str], out_mp3: str) -> None:
     
     safe_remove(listfile)
 
-# ---------- 获取音频时长（修复版本） ----------
-def get_audio_duration(audio_path: str) -> float:
-    """获取音频文件的时长（秒）- 修复版本"""
-    try:
-        # 优先使用 ffprobe，这在云端更可靠
-        ffmpeg_path = find_ffmpeg_path()
-        if ffmpeg_path:
-            # 构建 ffprobe 路径
-            if sys.platform.startswith("win"):
-                ffprobe_path = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe")
-            else:
-                ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
-            
-            if os.path.exists(ffprobe_path):
-                cmd = [
-                    ffprobe_path, "-v", "error", "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1", audio_path
-                ]
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
-                if result.returncode == 0:
-                    return float(result.stdout.strip())
-    except Exception as e:
-        pass
-    
-    # 备用方案：使用 pydub
-    try:
-        if PYDUB_AVAILABLE:
-            audio = AudioSegment.from_file(audio_path)
-            return len(audio) / 1000.0  # 转换为秒
-    except Exception as e:
-        pass
-    
-    # 最终备用方案：返回默认时长
-    return 3.0
-
 # ---------- 预览音频生成函数 ----------
 def generate_preview_audio(df, row_index, audio_segments):
     """生成预览音频"""
@@ -1164,16 +1060,7 @@ df = None
 if uploaded:
     try:
         if uploaded.name.lower().endswith((".csv",".txt")):
-            # 对于TXT文件，尝试检测分隔符
-            if uploaded.name.lower().endswith(".txt"):
-                content = uploaded.getvalue().decode("utf-8")
-                first_line = content.split('\n')[0]
-                if '\t' in first_line:
-                    df = pd.read_csv(uploaded, sep='\t')
-                else:
-                    df = pd.read_csv(uploaded)
-            else:
-                df = pd.read_csv(uploaded)
+            df = pd.read_csv(uploaded)
         else:
             df = pd.read_excel(uploaded)
         cols = [str(c).strip() for c in df.columns]
@@ -1361,7 +1248,7 @@ with tab_voice_settings:
 
 # ---------- Frame rendering ----------
 def render_frame(en, ph, cn, conf, size=(1280,720)):
-    """渲染单帧图像 - 修复中文显示版本"""
+    """渲染单帧图像 - 专门修复音标显示问题"""
     W,H = size
     
     try:
@@ -1383,13 +1270,13 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         draw = ImageDraw.Draw(base)
 
-        # 加载字体 - 专门为中文字体使用不同的加载策略
-        font_en = load_font_with_fallback(conf.get("english_size", 28))
-        font_cn = load_chinese_font(conf.get("chinese_size", 28))  # 专门为中文字体
+        # 加载字体 - 专门为音标使用不同的字体策略
+        font_en = load_font(None, conf.get("english_size", 28))  # 默认改为28
+        font_cn = load_font(None, conf.get("chinese_size", 28))  # 默认改为28
         
-        # 为音标专门处理字体
-        phonetic_size = conf.get("phonetic_size", 22)
-        phonetic_font = load_font_with_fallback(phonetic_size)
+        # 为音标专门处理字体 - 使用专门的音标字体加载函数
+        phonetic_size = conf.get("phonetic_size", 22)  # 默认改为22
+        phonetic_font = load_phonetic_font(phonetic_size)
 
         # 计算文本位置
         english_color = conf.get("english_color", "#000000")
@@ -1436,73 +1323,56 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
             
             base.paste(bg_rect, (text_start_x, start_y - padding), bg_rect)
         
-        # 英语文本
+        # 英语
         y = start_y
         try:
             bbox = draw.textbbox((0, 0), en, font=font_en)
             text_width = bbox[2] - bbox[0]
             x = text_start_x + (text_area_width - text_width) // 2
             draw.text((x, y), en, font=font_en, fill=english_color)
-        except Exception as e:
-            # 备用方案
+        except:
             x = text_start_x + (text_area_width - len(en) * 20) // 2
             draw.text((x, y), en, font=font_en, fill=english_color)
         
         y += conf.get("english_size", 28) + conf.get("english_phonetic_gap", 10)
         
-        # 音标文本
-        if ph and ph.strip():
-            converted_ph = convert_phonetic_text(ph)
+        # 音标 - 使用转换后的文本
+        converted_ph = convert_phonetic_text(ph)
+        try:
+            bbox = draw.textbbox((0, 0), converted_ph, font=phonetic_font)
+            text_width = bbox[2] - bbox[0]
+            x = text_start_x + (text_area_width - text_width) // 2
+            draw.text((x, y), converted_ph, font=phonetic_font, fill=phonetic_color)
+        except Exception as e:
+            # 如果音标渲染失败，尝试使用英文字体
             try:
-                bbox = draw.textbbox((0, 0), converted_ph, font=phonetic_font)
+                bbox = draw.textbbox((0, 0), converted_ph, font=font_en)
                 text_width = bbox[2] - bbox[0]
                 x = text_start_x + (text_area_width - text_width) // 2
-                draw.text((x, y), converted_ph, font=phonetic_font, fill=phonetic_color)
-            except Exception as e:
-                # 备用方案：使用英文字体
-                try:
-                    bbox = draw.textbbox((0, 0), converted_ph, font=font_en)
-                    text_width = bbox[2] - bbox[0]
-                    x = text_start_x + (text_area_width - text_width) // 2
-                    draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
-                except:
-                    # 最终备选
-                    x = text_start_x + (text_area_width - len(converted_ph) * 15) // 2
-                    draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
-            
-            y += phonetic_size + conf.get("phonetic_cn_gap", 10)
+                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
+            except:
+                # 最终备选：显示原始文本
+                x = text_start_x + (text_area_width - len(converted_ph) * 15) // 2
+                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
         
-        # 中文文本 - 使用专门的中文字体
+        y += phonetic_size + conf.get("phonetic_cn_gap", 10)
+        
+        # 中文
         try:
             bbox = draw.textbbox((0, 0), cn, font=font_cn)
             text_width = bbox[2] - bbox[0]
             x = text_start_x + (text_area_width - text_width) // 2
             draw.text((x, y), cn, font=font_cn, fill=chinese_color)
         except Exception as e:
-            # 中文渲染失败的备用方案
-            try:
-                # 尝试使用英文字体
-                bbox = draw.textbbox((0, 0), cn, font=font_en)
-                text_width = bbox[2] - bbox[0]
-                x = text_start_x + (text_area_width - text_width) // 2
-                draw.text((x, y), cn, font=font_en, fill=chinese_color)
-            except:
-                # 最终备选
-                x = text_start_x + (text_area_width - len(cn) * 25) // 2
-                draw.text((x, y), cn, font=font_en, fill=chinese_color)
+            x = text_start_x + (text_area_width - len(cn) * 25) // 2
+            draw.text((x, y), cn, font=font_cn, fill=chinese_color)
 
         return base
     except Exception as e:
         st.error(f"帧渲染失败: {e}")
-        # 创建错误图像
         error_img = Image.new("RGB", (W, H), conf.get("bg_color", "#D1E1EF"))
         draw = ImageDraw.Draw(error_img)
-        # 使用默认字体显示错误信息
-        try:
-            error_font = ImageFont.load_default()
-            draw.text((50, H//2), f"渲染错误: {str(e)}", fill="red", font=error_font)
-        except:
-            draw.text((50, H//2), "渲染错误", fill="red")
+        draw.text((50, H//2), "渲染错误", fill="red")
         return error_img
 
 # ---------- 效果预览部分 ----------
@@ -1607,17 +1477,8 @@ if uploaded is not None and df is not None:
             st.markdown('<div class="scrollable-content">', unsafe_allow_html=True)
             
             # 自定义字体上传
-            st.markdown("### 🎯 字体解决方案（重要）")
-            st.warning("""
-            **Streamlit Cloud 字体问题解决方案：**
-            
-            1. **上传自定义字体**（推荐）- 上传支持中文的TTF字体文件
-            2. **使用系统备用字体** - 应用会自动尝试多种系统字体
-            3. **Google Fonts 回退** - 通过CSS加载在线字体作为备选
-            """)
-            
-            st.markdown("#### 上传自定义字体")
-            st.info("上传支持中文和音标的字体文件（TTF/OTF格式），如：微软雅黑、思源黑体等")
+            st.markdown("**自定义字体**")
+            st.info("上传支持音标和中文的字体文件（TTF/OTF格式）")
             custom_font_file = st.file_uploader("上传自定义字体文件", type=["ttf", "otf"], key="ui_custom_font")
             if custom_font_file:
                 try:
@@ -1626,41 +1487,28 @@ if uploaded is not None and df is not None:
                     with open(custom_font_path, "wb") as f:
                         f.write(custom_font_file.getvalue())
                     st.session_state.custom_font_path = custom_font_path
-                    st.success("✅ 自定义字体上传成功！中文显示问题应该已解决。")
-                    
-                    # 立即测试新字体
-                    try:
-                        test_font = ImageFont.truetype(custom_font_path, 24)
-                        test_img = Image.new('RGB', (400, 50), color='white')
-                        test_draw = ImageDraw.Draw(test_img)
-                        test_draw.text((10, 10), "中文测试 Hello /həˈloʊ/", font=test_font, fill='black')
-                        st.image(test_img, caption="新字体测试预览", use_container_width=True)
-                        st.success("🎉 字体测试成功！中文、英文和音标都能正常显示。")
-                    except Exception as e:
-                        st.error(f"字体测试失败: {e}")
-                        
+                    st.success("✅ 自定义字体上传成功！")
                 except Exception as e:
                     st.error(f"字体文件上传失败: {e}")
-            else:
-                st.info("📝 当前使用系统字体，建议上传自定义字体以确保中文正常显示")
             
             # 字体测试
-            st.markdown("#### 字体测试")
+            st.markdown("**字体测试**")
             test_text = st.text_input("测试文本", value="Hello /həˈloʊ/ 你好", key="ui_font_test")
             if test_text:
+                test_font_path = st.session_state.get('custom_font_path', DEFAULT_FONT)
                 try:
-                    test_font = load_chinese_font(20)
-                    test_img = Image.new('RGB', (500, 60), color='white')
+                    test_font = ImageFont.truetype(test_font_path, 20) if test_font_path else ImageFont.load_default()
+                    test_img = Image.new('RGB', (400, 50), color='white')
                     test_draw = ImageDraw.Draw(test_img)
                     test_draw.text((10, 10), test_text, font=test_font, fill='black')
-                    st.image(test_img, caption="当前字体测试预览", use_container_width=True)
+                    st.image(test_img, caption="字体测试预览", use_container_width=True)
                     
-                    # 显示字体信息
-                    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-                        st.success(f"✅ 使用自定义字体: {os.path.basename(st.session_state.custom_font_path)}")
-                    else:
-                        st.info("ℹ️ 使用系统备用字体")
-                        
+                    # 显示转换后的音标
+                    if '/' in test_text:
+                        phonetic_part = test_text.split('/')[1] if len(test_text.split('/')) > 1 else ""
+                        converted_phonetic = convert_phonetic_text(phonetic_part)
+                        st.write(f"原始音标: {phonetic_part}")
+                        st.write(f"转换后: /{converted_phonetic}/")
                 except Exception as e:
                     st.error(f"字体测试失败: {e}")
     
@@ -1746,6 +1594,26 @@ if uploaded is not None and df is not None:
         
 else:
     st.warning("请先上传数据文件以启用预览功能")
+
+# ---------- 获取音频时长 ----------
+def get_audio_duration(audio_path: str) -> float:
+    """获取音频文件的时长（秒）"""
+    try:
+        if PYDUB_AVAILABLE:
+            audio = AudioSegment.from_file(audio_path)
+            return len(audio) / 1000.0  # 转换为秒
+        else:
+            # 备用方案：使用 ffprobe
+            ffprobe_path = find_ffmpeg_path().replace("ffmpeg", "ffprobe")
+            cmd = [
+                ffprobe_path, "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", audio_path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            return float(result.stdout.strip())
+    except Exception as e:
+        # 如果无法获取时长，返回默认值
+        return 3.0
 
 # ---------- 清除生成的视频文件 ----------
 def clear_generated_videos():
@@ -2080,46 +1948,19 @@ st.sidebar.write(f"✅ edge-tts: {'可用' if EDGE_TTS_AVAILABLE else '缺失'}"
 st.sidebar.write(f"✅ pydub: {'可用' if PYDUB_AVAILABLE else '缺失'}")
 
 # 字体检测信息
-font_status = "⚠️ 未知"
-try:
-    test_font = load_chinese_font(20)
-    # 测试中文字体
-    test_img = Image.new('RGB', (200, 30), color='white')
-    test_draw = ImageDraw.Draw(test_img)
-    test_draw.text((10, 5), "中文测试", font=test_font, fill='black')
-    font_status = "✅ 中文字体正常"
-except Exception as e:
-    font_status = f"⚠️ 字体问题: {str(e)}"
-
-st.sidebar.write(f"📝 字体状态: {font_status}")
-
 if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-    st.sidebar.success("✅ 使用自定义字体")
+    st.sidebar.success("✅ 字体: 使用自定义字体")
 elif DEFAULT_FONT:
     font_name = os.path.basename(DEFAULT_FONT)
-    st.sidebar.info(f"📝 系统字体: {font_name}")
+    st.sidebar.info(f"✅ 字体: {font_name}")
 else:
-    st.sidebar.warning("⚠️ 使用默认字体")
+    st.sidebar.warning("⚠️ 字体: 使用默认字体")
 
 # 检测运行环境
 if 'STREAMLIT_SHARING_MODE' in os.environ:
     st.sidebar.info("🌐 Streamlit Cloud 环境")
-    # 在云端环境提供字体上传提示
-    st.sidebar.markdown("---")
-    st.sidebar.info("💡 **云端字体提示**")
-    st.sidebar.write("在高级设置中上传中文字体文件以确保中文正常显示")
 else:
     st.sidebar.info("💻 本地运行环境")
-
-# 字体状态检查按钮
-if st.sidebar.button("🔍 检查字体状态"):
-    font_status = check_font_status()
-    if font_status["chinese_support"] and font_status["phonetic_support"]:
-        st.sidebar.success("✅ 字体状态正常")
-    else:
-        st.sidebar.error("⚠️ 字体存在问题")
-        for issue in font_status["issues"]:
-            st.sidebar.warning(issue)
 
 # ---------- 页脚 ----------
 st.markdown(
