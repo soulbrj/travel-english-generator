@@ -532,57 +532,17 @@ def cache_store(src: str, key: str):
         pass
 
 # ---------- 字体检测与加载 ----------
-def create_simple_phonetic_font():
-    """创建一个简单的音标字体替代方案"""
-    phonetic_font_path = os.path.join(tempfile.gettempdir(), "simple_phonetic.ttf")
-    
-    # 如果已经存在，直接返回
-    if os.path.exists(phonetic_font_path):
-        return phonetic_font_path
-    
-    try:
-        # 使用系统默认字体创建一个简单的替代
-        # 这里我们只是复制系统字体作为基础
-        system_fonts = []
-        if sys.platform.startswith("win"):
-            system_fonts = [
-                r"C:\Windows\Fonts\arial.ttf",
-                r"C:\Windows\Fonts\times.ttf",
-            ]
-        elif sys.platform.startswith("darwin"):
-            system_fonts = [
-                "/System/Library/Fonts/Arial.ttf",
-                "/System/Library/Fonts/Times.ttf",
-            ]
-        else:
-            system_fonts = [
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            ]
-        
-        for font_path in system_fonts:
-            if os.path.exists(font_path):
-                # 直接使用系统字体
-                return font_path
-        
-        # 如果找不到系统字体，返回None
-        return None
-        
-    except Exception as e:
-        return None
-
 def find_font():
     """跨平台查找支持中文和音标的字体"""
     cand = []
     
-    # 优先寻找支持音标和中文的字体
     if sys.platform.startswith("win"):
         cand = [
             r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS - 支持音标和中文
             r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑 - 支持中文
             r"C:\Windows\Fonts\times.ttf",     # Times New Roman - 支持音标
             r"C:\Windows\Fonts\arial.ttf",     # Arial - 支持音标
-            r"C:\Windows\Fonts\seguiemj.ttf",  # Segoe UI Emoji - 支持特殊字符
+            r"C:\Windows\Fonts\simhei.ttf",    # 黑体 - 支持中文
         ]
     elif sys.platform.startswith("darwin"):
         cand = [
@@ -609,12 +569,7 @@ def find_font():
             except Exception:
                 continue
     
-    # 如果找不到合适的字体，创建一个简单的替代
-    simple_font = create_simple_phonetic_font()
-    if simple_font:
-        return simple_font
-    
-    # 如果还是找不到，返回第一个存在的字体
+    # 如果找不到合适的字体，返回第一个存在的字体
     for p in cand:
         if os.path.exists(p):
             return p
@@ -674,6 +629,51 @@ def load_phonetic_font(size):
     
     # 尝试加载字体
     for font_path in phonetic_fonts:
+        if font_path and os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
+    
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
+
+def load_chinese_font(size):
+    """专门加载中文字体"""
+    # 优先使用专门支持中文的字体
+    chinese_fonts = []
+    
+    # 添加用户自定义字体
+    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+        chinese_fonts.append(st.session_state.custom_font_path)
+    
+    # 添加专门支持中文的字体
+    if sys.platform.startswith("win"):
+        chinese_fonts.extend([
+            r"C:\Windows\Fonts\simhei.ttf",    # 黑体
+            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑
+            r"C:\Windows\Fonts\simsun.ttc",    # 宋体
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+        ])
+    elif sys.platform.startswith("darwin"):
+        chinese_fonts.extend([
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Arial Unicode.ttf",
+        ])
+    else:
+        chinese_fonts.extend([
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ])
+    
+    # 添加默认字体
+    if DEFAULT_FONT:
+        chinese_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in chinese_fonts:
         if font_path and os.path.exists(font_path):
             try:
                 return ImageFont.truetype(font_path, size)
@@ -1248,7 +1248,7 @@ with tab_voice_settings:
 
 # ---------- Frame rendering ----------
 def render_frame(en, ph, cn, conf, size=(1280,720)):
-    """渲染单帧图像 - 专门修复音标显示问题"""
+    """渲染单帧图像 - 修复中文和音标显示问题"""
     W,H = size
     
     try:
@@ -1270,13 +1270,10 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         draw = ImageDraw.Draw(base)
 
-        # 加载字体 - 专门为音标使用不同的字体策略
-        font_en = load_font(None, conf.get("english_size", 28))  # 默认改为28
-        font_cn = load_font(None, conf.get("chinese_size", 28))  # 默认改为28
-        
-        # 为音标专门处理字体 - 使用专门的音标字体加载函数
-        phonetic_size = conf.get("phonetic_size", 22)  # 默认改为22
-        phonetic_font = load_phonetic_font(phonetic_size)
+        # 🔥 修复：使用专门的字体加载函数
+        font_en = load_font(None, conf.get("english_size", 28))
+        font_ph = load_phonetic_font(conf.get("phonetic_size", 22))
+        font_cn = load_chinese_font(conf.get("chinese_size", 28))
 
         # 计算文本位置
         english_color = conf.get("english_color", "#000000")
@@ -1286,7 +1283,7 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         # 计算总高度
         total_height = (
             conf.get("english_size", 28) + 
-            phonetic_size + 
+            conf.get("phonetic_size", 22) + 
             conf.get("chinese_size", 28) +
             conf.get("english_phonetic_gap", 10) +
             conf.get("phonetic_cn_gap", 10)
@@ -1337,35 +1334,44 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         y += conf.get("english_size", 28) + conf.get("english_phonetic_gap", 10)
         
         # 音标 - 使用转换后的文本
-        converted_ph = convert_phonetic_text(ph)
-        try:
-            bbox = draw.textbbox((0, 0), converted_ph, font=phonetic_font)
-            text_width = bbox[2] - bbox[0]
-            x = text_start_x + (text_area_width - text_width) // 2
-            draw.text((x, y), converted_ph, font=phonetic_font, fill=phonetic_color)
-        except Exception as e:
-            # 如果音标渲染失败，尝试使用英文字体
+        if ph and ph.strip():
+            converted_ph = convert_phonetic_text(ph)
             try:
-                bbox = draw.textbbox((0, 0), converted_ph, font=font_en)
+                bbox = draw.textbbox((0, 0), converted_ph, font=font_ph)
                 text_width = bbox[2] - bbox[0]
                 x = text_start_x + (text_area_width - text_width) // 2
-                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
-            except:
-                # 最终备选：显示原始文本
-                x = text_start_x + (text_area_width - len(converted_ph) * 15) // 2
-                draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
+                draw.text((x, y), converted_ph, font=font_ph, fill=phonetic_color)
+            except Exception as e:
+                # 如果音标渲染失败，尝试使用英文字体
+                try:
+                    bbox = draw.textbbox((0, 0), converted_ph, font=font_en)
+                    text_width = bbox[2] - bbox[0]
+                    x = text_start_x + (text_area_width - text_width) // 2
+                    draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
+                except:
+                    # 最终备选：显示原始文本
+                    x = text_start_x + (text_area_width - len(converted_ph) * 15) // 2
+                    draw.text((x, y), converted_ph, font=font_en, fill=phonetic_color)
+            
+            y += conf.get("phonetic_size", 22) + conf.get("phonetic_cn_gap", 10)
         
-        y += phonetic_size + conf.get("phonetic_cn_gap", 10)
-        
-        # 中文
+        # 中文 - 使用专门的中文字体
         try:
             bbox = draw.textbbox((0, 0), cn, font=font_cn)
             text_width = bbox[2] - bbox[0]
             x = text_start_x + (text_area_width - text_width) // 2
             draw.text((x, y), cn, font=font_cn, fill=chinese_color)
         except Exception as e:
-            x = text_start_x + (text_area_width - len(cn) * 25) // 2
-            draw.text((x, y), cn, font=font_cn, fill=chinese_color)
+            # 如果中文字体渲染失败，尝试使用英文字体
+            try:
+                bbox = draw.textbbox((0, 0), cn, font=font_en)
+                text_width = bbox[2] - bbox[0]
+                x = text_start_x + (text_area_width - text_width) // 2
+                draw.text((x, y), cn, font=font_en, fill=chinese_color)
+            except Exception as e2:
+                # 最终备选：使用默认位置
+                x = text_start_x + (text_area_width - len(cn) * 25) // 2
+                draw.text((x, y), cn, font=font_en, fill=chinese_color)
 
         return base
     except Exception as e:
