@@ -1704,7 +1704,6 @@ def get_audio_duration(audio_path: str) -> float:
     except Exception as e:
         # 如果无法获取时长，返回默认值
         return 3.0
-
 # ---------- 清除生成的视频文件 ----------
 def clear_generated_videos():
     """清除所有生成的视频文件"""
@@ -2198,3 +2197,4 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True)
+
