@@ -561,7 +561,7 @@ def find_font():
         cand = [
             "/System/Library/Fonts/Arial.ttf",           # Arial - 支持音标
             "/System/Library/Fonts/Arial Unicode.ttf",   # Arial Unicode - 支持音标和中文
-            "/System/Library/Fonts/PingFang.ttf",        # 苹方 - 支持中文
+            "/System/Library/Fonts/PingFang.ttc",        # 苹方 - 支持中文
             "/System/Library/Fonts/Helvetica.ttc",       # Helvetica - 支持音标
             "/System/Library/Fonts/Times.ttc",           # Times - 支持音标
         ]
@@ -588,6 +588,113 @@ def find_font():
             return p
     
     return None
+
+DEFAULT_FONT = find_font()
+
+def load_font(path, size):
+    """加载字体，支持中文和音标"""
+    try:
+        # 优先使用用户上传的自定义字体
+        if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+            return ImageFont.truetype(st.session_state.custom_font_path, size)
+        if path and os.path.exists(path):
+            return ImageFont.truetype(path, size)
+        if DEFAULT_FONT:
+            return ImageFont.truetype(DEFAULT_FONT, size)
+    except Exception as e:
+        st.warning(f"字体加载失败: {e}，使用默认字体")
+    
+    # 最终回退到默认字体
+    return ImageFont.load_default()
+
+def load_phonetic_font(size):
+    """专门加载音标字体"""
+    # 优先使用专门支持音标的字体
+    phonetic_fonts = []
+    
+    # 添加用户自定义字体
+    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+        phonetic_fonts.append(st.session_state.custom_font_path)
+    
+    # 添加专门支持音标的字体
+    if sys.platform.startswith("win"):
+        phonetic_fonts.extend([
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman
+            r"C:\Windows\Fonts\arial.ttf",     # Arial
+        ])
+    elif sys.platform.startswith("darwin"):
+        phonetic_fonts.extend([
+            "/System/Library/Fonts/Arial Unicode.ttf",
+            "/System/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Times.ttc",
+        ])
+    else:
+        phonetic_fonts.extend([
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+        ])
+    
+    # 添加默认字体
+    if DEFAULT_FONT:
+        phonetic_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in phonetic_fonts:
+        if font_path and os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
+    
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
+
+def load_chinese_font(size):
+    """专门加载中文字体"""
+    # 优先使用专门支持中文的字体
+    chinese_fonts = []
+    
+    # 添加用户自定义字体
+    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+        chinese_fonts.append(st.session_state.custom_font_path)
+    
+    # 添加专门支持中文的字体
+    if sys.platform.startswith("win"):
+        chinese_fonts.extend([
+            r"C:\Windows\Fonts\simhei.ttf",    # 黑体
+            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑
+            r"C:\Windows\Fonts\simsun.ttc",    # 宋体
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+        ])
+    elif sys.platform.startswith("darwin"):
+        chinese_fonts.extend([
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Arial Unicode.ttf",
+        ])
+    else:
+        chinese_fonts.extend([
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ])
+    
+    # 添加默认字体
+    if DEFAULT_FONT:
+        chinese_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in chinese_fonts:
+        if font_path and os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
+    
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
 
 DEFAULT_FONT = find_font()
 
@@ -1497,12 +1604,14 @@ if uploaded is not None and df is not None:
             
             # 自定义字体上传
             st.markdown("**自定义字体**")
-            st.info("上传支持音标和中文的字体文件（TTF/OTF格式）")
-            custom_font_file = st.file_uploader("上传自定义字体文件", type=["ttf", "otf"], key="ui_custom_font")
+            st.info("上传支持音标和中文的字体文件（TTF/OTF/TTC格式）")
+            # 修改这里：添加 ttc 格式支持
+            custom_font_file = st.file_uploader("上传自定义字体文件", type=["ttf", "otf", "ttc"], key="ui_custom_font")
             if custom_font_file:
                 try:
-                    # 保存自定义字体到临时文件
-                    custom_font_path = os.path.join(tempfile.gettempdir(), f"custom_font_{hashlib.md5(custom_font_file.getvalue()).hexdigest()}.ttf")
+                    # 保存自定义字体到临时文件，保持原始文件扩展名
+                    file_extension = custom_font_file.name.split('.')[-1].lower()
+                    custom_font_path = os.path.join(tempfile.gettempdir(), f"custom_font_{hashlib.md5(custom_font_file.getvalue()).hexdigest()}.{file_extension}")
                     with open(custom_font_path, "wb") as f:
                         f.write(custom_font_file.getvalue())
                     st.session_state.custom_font_path = custom_font_path
@@ -1990,3 +2099,4 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True)
+
