@@ -148,7 +148,7 @@ st.set_page_config(
 
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+IPA:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Charis+SIL:wght@400;700&display=swap');
 
 :root {{
@@ -162,6 +162,19 @@ st.markdown(f"""
   --text-muted: {TEXT_MUTED};
   --card-bg: {CARD_BG};
   --border-color: {BORDER_COLOR};
+}}
+
+/* 使用组合字体 */
+.english-text {{
+    font-family: 'Charis SIL', 'Noto Sans SC', sans-serif;
+}}
+
+.phonetic-text {{
+    font-family: 'Charis SIL', 'Arial Unicode MS', sans-serif;
+}}
+
+.chinese-text {{
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
 }}
 
 .stApp {{
