@@ -608,32 +608,31 @@ def load_font(path, size):
     return ImageFont.load_default()
 
 def load_phonetic_font(size):
-    """专门加载音标字体"""
-    # 优先使用专门支持音标的字体
+    """专门加载音标字体 - 不使用自定义字体，始终使用系统音标字体"""
+    # 专门支持音标的字体列表 - 不包含自定义字体
     phonetic_fonts = []
     
-    # 添加用户自定义字体
-    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-        phonetic_fonts.append(st.session_state.custom_font_path)
-    
-    # 添加专门支持音标的字体
+    # 添加专门支持音标的字体（不包含用户自定义字体）
     if sys.platform.startswith("win"):
         phonetic_fonts.extend([
             r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
             r"C:\Windows\Fonts\times.ttf",     # Times New Roman
             r"C:\Windows\Fonts\arial.ttf",     # Arial
+            r"C:\Windows\Fonts\cour.ttf",      # Courier New
         ])
     elif sys.platform.startswith("darwin"):
         phonetic_fonts.extend([
             "/System/Library/Fonts/Arial Unicode.ttf",
             "/System/Library/Fonts/Arial.ttf",
             "/System/Library/Fonts/Times.ttc",
+            "/System/Library/Fonts/Helvetica.ttc",
         ])
     else:
         phonetic_fonts.extend([
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
             "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
         ])
     
     # 添加默认字体
@@ -649,117 +648,10 @@ def load_phonetic_font(size):
                 continue
     
     # 如果都失败，返回默认字体
-    return load_font(None, size)
-
-def load_chinese_font(size):
-    """专门加载中文字体"""
-    # 优先使用专门支持中文的字体
-    chinese_fonts = []
-    
-    # 添加用户自定义字体
-    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-        chinese_fonts.append(st.session_state.custom_font_path)
-    
-    # 添加专门支持中文的字体
-    if sys.platform.startswith("win"):
-        chinese_fonts.extend([
-            r"C:\Windows\Fonts\simhei.ttf",    # 黑体
-            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑
-            r"C:\Windows\Fonts\simsun.ttc",    # 宋体
-            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
-        ])
-    elif sys.platform.startswith("darwin"):
-        chinese_fonts.extend([
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/STHeiti Light.ttc",
-            "/System/Library/Fonts/Arial Unicode.ttf",
-        ])
-    else:
-        chinese_fonts.extend([
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        ])
-    
-    # 添加默认字体
-    if DEFAULT_FONT:
-        chinese_fonts.append(DEFAULT_FONT)
-    
-    # 尝试加载字体
-    for font_path in chinese_fonts:
-        if font_path and os.path.exists(font_path):
-            try:
-                return ImageFont.truetype(font_path, size)
-            except Exception:
-                continue
-    
-    # 如果都失败，返回默认字体
-    return load_font(None, size)
-
-DEFAULT_FONT = find_font()
-
-def load_font(path, size):
-    """加载字体，支持中文和音标"""
-    try:
-        # 优先使用用户上传的自定义字体
-        if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-            return ImageFont.truetype(st.session_state.custom_font_path, size)
-        if path and os.path.exists(path):
-            return ImageFont.truetype(path, size)
-        if DEFAULT_FONT:
-            return ImageFont.truetype(DEFAULT_FONT, size)
-    except Exception as e:
-        st.warning(f"字体加载失败: {e}，使用默认字体")
-    
-    # 最终回退到默认字体
     return ImageFont.load_default()
 
-def load_phonetic_font(size):
-    """专门加载音标字体"""
-    # 优先使用专门支持音标的字体
-    phonetic_fonts = []
-    
-    # 添加用户自定义字体
-    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-        phonetic_fonts.append(st.session_state.custom_font_path)
-    
-    # 添加专门支持音标的字体
-    if sys.platform.startswith("win"):
-        phonetic_fonts.extend([
-            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
-            r"C:\Windows\Fonts\times.ttf",     # Times New Roman
-            r"C:\Windows\Fonts\arial.ttf",     # Arial
-        ])
-    elif sys.platform.startswith("darwin"):
-        phonetic_fonts.extend([
-            "/System/Library/Fonts/Arial Unicode.ttf",
-            "/System/Library/Fonts/Arial.ttf",
-            "/System/Library/Fonts/Times.ttc",
-        ])
-    else:
-        phonetic_fonts.extend([
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
-        ])
-    
-    # 添加默认字体
-    if DEFAULT_FONT:
-        phonetic_fonts.append(DEFAULT_FONT)
-    
-    # 尝试加载字体
-    for font_path in phonetic_fonts:
-        if font_path and os.path.exists(font_path):
-            try:
-                return ImageFont.truetype(font_path, size)
-            except Exception:
-                continue
-    
-    # 如果都失败，返回默认字体
-    return load_font(None, size)
-
 def load_chinese_font(size):
-    """专门加载中文字体"""
+    """专门加载中文字体 - 使用自定义字体"""
     # 优先使用专门支持中文的字体
     chinese_fonts = []
     
@@ -794,6 +686,52 @@ def load_chinese_font(size):
     
     # 尝试加载字体
     for font_path in chinese_fonts:
+        if font_path and os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
+    
+    # 如果都失败，返回默认字体
+    return load_font(None, size)
+
+def load_english_font(size):
+    """专门加载英文字体 - 使用自定义字体"""
+    # 优先使用专门支持英文的字体
+    english_fonts = []
+    
+    # 添加用户自定义字体
+    if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
+        english_fonts.append(st.session_state.custom_font_path)
+    
+    # 添加专门支持英文的字体
+    if sys.platform.startswith("win"):
+        english_fonts.extend([
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman
+            r"C:\Windows\Fonts\arial.ttf",     # Arial
+            r"C:\Windows\Fonts\cour.ttf",      # Courier New
+            r"C:\Windows\Fonts\verdana.ttf",   # Verdana
+        ])
+    elif sys.platform.startswith("darwin"):
+        english_fonts.extend([
+            "/System/Library/Fonts/Times.ttc",
+            "/System/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Verdana.ttf",
+        ])
+    else:
+        english_fonts.extend([
+            "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        ])
+    
+    # 添加默认字体
+    if DEFAULT_FONT:
+        english_fonts.append(DEFAULT_FONT)
+    
+    # 尝试加载字体
+    for font_path in english_fonts:
         if font_path and os.path.exists(font_path):
             try:
                 return ImageFont.truetype(font_path, size)
@@ -1391,8 +1329,9 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         draw = ImageDraw.Draw(base)
 
         # 🔥 修复：使用专门的字体加载函数
-        font_en = load_font(None, conf.get("english_size", 28))
-        font_ph = load_phonetic_font(conf.get("phonetic_size", 22))
+        # 英文使用自定义字体，音标使用专门的音标字体，中文使用自定义字体
+        font_en = load_english_font(conf.get("english_size", 28))
+        font_ph = load_phonetic_font(conf.get("phonetic_size", 22))  # 音标不使用自定义字体
         font_cn = load_chinese_font(conf.get("chinese_size", 28))
 
         # 计算文本位置
@@ -1440,7 +1379,7 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
             
             base.paste(bg_rect, (text_start_x, start_y - padding), bg_rect)
         
-        # 英语
+        # 英语 - 使用自定义字体
         y = start_y
         try:
             bbox = draw.textbbox((0, 0), en, font=font_en)
@@ -1453,7 +1392,7 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
         
         y += conf.get("english_size", 28) + conf.get("english_phonetic_gap", 10)
         
-        # 音标 - 使用转换后的文本
+        # 音标 - 使用专门的音标字体（不使用自定义字体）
         if ph and ph.strip():
             converted_ph = convert_phonetic_text(ph)
             try:
@@ -1475,7 +1414,7 @@ def render_frame(en, ph, cn, conf, size=(1280,720)):
             
             y += conf.get("phonetic_size", 22) + conf.get("phonetic_cn_gap", 10)
         
-        # 中文 - 使用专门的中文字体
+        # 中文 - 使用自定义字体
         try:
             bbox = draw.textbbox((0, 0), cn, font=font_cn)
             text_width = bbox[2] - bbox[0]
@@ -1552,16 +1491,16 @@ if uploaded is not None and df is not None:
             st.markdown("**音标显示解决方案**")
             st.success("""
             **已启用音标显示优化方案：**
-            - ✅ 使用 Google Fonts 的 Noto Sans IPA 字体（专门支持音标）
+            - ✅ 使用专门的音标字体（不受自定义字体影响）
             - ✅ 使用 Charis SIL 字体作为备选（专门为语言学设计）
             - ✅ 自动字符映射确保兼容性
-            - ✅ 支持自定义字体上传
+            - ✅ 支持自定义字体（仅影响英文和中文）
             """)
             
             # 字体信息显示
             st.markdown("**字体信息**")
             if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-                st.success(f"✅ 当前使用自定义字体")
+                st.success(f"✅ 当前使用自定义字体（仅影响英文和中文）")
             elif DEFAULT_FONT:
                 font_name = os.path.basename(DEFAULT_FONT)
                 st.info(f"📝 系统字体: {font_name}")
@@ -1604,7 +1543,7 @@ if uploaded is not None and df is not None:
             
             # 自定义字体上传
             st.markdown("**自定义字体**")
-            st.info("上传支持音标和中文的字体文件（TTF/OTF/TTC格式）")
+            st.info("上传支持英文和中文的字体文件（TTF/OTF/TTC格式） - 注意：音标将使用专门的音标字体，不受自定义字体影响")
             # 修改这里：添加 ttc 格式支持
             custom_font_file = st.file_uploader("上传自定义字体文件", type=["ttf", "otf", "ttc"], key="ui_custom_font")
             if custom_font_file:
@@ -1615,7 +1554,7 @@ if uploaded is not None and df is not None:
                     with open(custom_font_path, "wb") as f:
                         f.write(custom_font_file.getvalue())
                     st.session_state.custom_font_path = custom_font_path
-                    st.success("✅ 自定义字体上传成功！")
+                    st.success("✅ 自定义字体上传成功！将应用于英文和中文显示")
                 except Exception as e:
                     st.error(f"字体文件上传失败: {e}")
             
@@ -1629,7 +1568,7 @@ if uploaded is not None and df is not None:
                     test_img = Image.new('RGB', (400, 50), color='white')
                     test_draw = ImageDraw.Draw(test_img)
                     test_draw.text((10, 10), test_text, font=test_font, fill='black')
-                    st.image(test_img, caption="字体测试预览", use_container_width=True)
+                    st.image(test_img, caption="字体测试预览（英文和中文使用自定义字体，音标使用专门字体）", use_container_width=True)
                     
                     # 显示转换后的音标
                     if '/' in test_text:
@@ -2077,7 +2016,7 @@ st.sidebar.write(f"✅ pydub: {'可用' if PYDUB_AVAILABLE else '缺失'}")
 
 # 字体检测信息
 if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-    st.sidebar.success("✅ 字体: 使用自定义字体")
+    st.sidebar.success("✅ 字体: 使用自定义字体（仅影响英文和中文）")
 elif DEFAULT_FONT:
     font_name = os.path.basename(DEFAULT_FONT)
     st.sidebar.info(f"✅ 字体: {font_name}")
@@ -2099,4 +2038,3 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True)
-
