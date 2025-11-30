@@ -546,38 +546,47 @@ def cache_store(src: str, key: str):
 
 # ---------- 字体检测与加载 ----------
 def find_font():
-    """跨平台查找支持中文和音标的字体"""
+    """跨平台查找支持中文和音标的字体 - 增强版本"""
     cand = []
     
-    if sys.platform.startswith("win"):
+    # 首先检查云环境字体
+    if 'STREAMLIT_SHARING_MODE' in os.environ:
         cand = [
-            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS - 支持音标和中文
-            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑 - 支持中文
-            r"C:\Windows\Fonts\times.ttf",     # Times New Roman - 支持音标
-            r"C:\Windows\Fonts\arial.ttf",     # Arial - 支持音标
-            r"C:\Windows\Fonts\simhei.ttf",    # 黑体 - 支持中文
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
+        ]
+    elif sys.platform.startswith("win"):
+        cand = [
+            r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑
+            r"C:\Windows\Fonts\simhei.ttf",    # 黑体
+            r"C:\Windows\Fonts\arialuni.ttf",  # Arial Unicode MS
+            r"C:\Windows\Fonts\times.ttf",     # Times New Roman
         ]
     elif sys.platform.startswith("darwin"):
         cand = [
-            "/System/Library/Fonts/Arial.ttf",           # Arial - 支持音标
-            "/System/Library/Fonts/Arial Unicode.ttf",   # Arial Unicode - 支持音标和中文
-            "/System/Library/Fonts/PingFang.ttf",        # 苹方 - 支持中文
-            "/System/Library/Fonts/Helvetica.ttc",       # Helvetica - 支持音标
-            "/System/Library/Fonts/Times.ttc",           # Times - 支持音标
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Arial Unicode.ttf",
+            "/System/Library/Fonts/Arial.ttf",
         ]
     else:
         cand = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      # DejaVu Sans - 支持音标
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", # Liberation Sans - 支持音标
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",       # 文泉驿微米黑 - 支持中文
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", # Noto Sans CJK - 支持中文和音标
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ]
     
     for p in cand:
         if os.path.exists(p):
             try:
-                # 测试字体是否支持音标字符
+                # 测试字体是否支持中文
                 test_font = ImageFont.truetype(p, 12)
+                # 测试中文字符渲染
+                test_image = Image.new('RGB', (100, 30), color='white')
+                test_draw = ImageDraw.Draw(test_image)
+                test_draw.text((10, 10), "中文测试", font=test_font, fill='black')
                 return p
             except Exception:
                 continue
@@ -586,7 +595,6 @@ def find_font():
     for p in cand:
         if os.path.exists(p):
             return p
-    
     return None
 
 DEFAULT_FONT = find_font()
@@ -1990,3 +1998,4 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True)
+
