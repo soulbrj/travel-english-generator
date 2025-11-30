@@ -103,7 +103,7 @@ def ffmpeg_available() -> bool:
     return find_ffmpeg_path() is not None
 
 def run_ffmpeg_command(cmd):
-    """跨平台运行 ffmpeg 命令"""
+    """跨平台运行 ffmpeg 命令 - 增强版本"""
     ffmpeg_path = find_ffmpeg_path()
     if not ffmpeg_path:
         raise RuntimeError("FFmpeg not found")
@@ -506,6 +506,29 @@ div.stButton > button:hover {{
 .live-preview-chinese {{
   font-size: 20px;
   color: {TEXT_DARK};
+}}
+
+/* 自动下载样式 */
+.auto-download-container {{
+  background: rgba(16, 185, 129, 0.1);
+  border: 2px solid rgba(16, 185, 129, 0.3);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+  text-align: center;
+}}
+
+.auto-download-title {{
+  font-size: 18px;
+  font-weight: 700;
+  color: {SUCCESS_COLOR};
+  margin-bottom: 10px;
+}}
+
+.auto-download-message {{
+  font-size: 14px;
+  color: {TEXT_MUTED};
+  margin-bottom: 15px;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -1703,18 +1726,31 @@ def clear_generated_videos():
         st.error(f"清除视频文件时出错: {e}")
         return 0
 
-# ---------- 合成视频 ----------
+# ---------- 优化后的视频合成函数 ----------
 def merge_video_audio(video_path, audio_path, out_path):
+    """优化后的音视频合并函数 - 针对Streamlit Cloud环境"""
     if not ffmpeg_available():
         raise RuntimeError("ffmpeg missing for merge_video_audio")
+    
+    # 针对Streamlit Cloud环境的优化参数
     cmd = [
-        "ffmpeg","-y","-i",video_path,"-i",audio_path,
-        "-c:v","copy","-c:a","aac","-shortest",out_path
+        "ffmpeg", "-y", 
+        "-i", video_path, 
+        "-i", audio_path,
+        "-c:v", "libx264",      # 使用兼容性更好的视频编码
+        "-preset", "medium",    # 平衡速度和质量
+        "-crf", "23",           # 控制视频质量
+        "-c:a", "aac",          # 使用AAC音频编码
+        "-b:a", "192k",         # 音频比特率
+        "-ar", "44100",         # 音频采样率
+        "-ac", "2",             # 立体声
+        "-shortest", 
+        out_path
     ]
     run_ffmpeg_command(cmd)
 
 def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, progress_cb=None):
-    """整合生成流程 - 修复版本"""
+    """整合生成流程 - 针对Streamlit Cloud优化的版本"""
     tmpdir = tempfile.mkdtemp(prefix="gen_")
     try:
         W,H = video_params.get("resolution",(1280,720))
@@ -1803,9 +1839,15 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
         
         video_no_audio = os.path.join(tmpdir, "video.mp4")
         
+        # 优化视频编码参数
         cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
-            "-i", list_txt, "-r", str(fps), "-pix_fmt", "yuv420p", 
+            "-i", list_txt, 
+            "-r", str(fps), 
+            "-c:v", "libx264",      # 使用兼容性更好的视频编码
+            "-preset", "medium",    # 平衡速度和质量
+            "-crf", "23",           # 控制视频质量
+            "-pix_fmt", "yuv420p", 
             video_no_audio
         ]
         
@@ -1826,12 +1868,8 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
             
             # 合并音视频
             out_video = os.path.join(tmpdir, "final_out.mp4")
-            cmd = [
-                "ffmpeg", "-y", "-i", video_no_audio, "-i", final_audio,
-                "-c:v", "copy", "-c:a", "aac", "-shortest", out_video
-            ]
             try:
-                run_ffmpeg_command(cmd)
+                merge_video_audio(video_no_audio, final_audio, out_video)
             except Exception as e:
                 st.error(f"音视频合并失败: {e}")
                 return None
@@ -1863,22 +1901,70 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
         except:
             pass
 
+# ---------- 自动下载功能 ----------
+def create_auto_download_link(video_path, download_filename="travel_english.mp4"):
+    """创建自动下载链接"""
+    if not video_path or not os.path.exists(video_path):
+        return None
+    
+    try:
+        with open(video_path, "rb") as f:
+            video_bytes = f.read()
+        
+        # 创建base64编码的下载链接
+        b64 = base64.b64encode(video_bytes).decode()
+        download_href = f'<a href="data:video/mp4;base64,{b64}" download="{download_filename}" id="auto_download_link" style="display: none;">自动下载</a>'
+        
+        # JavaScript代码来自动触发下载
+        js_code = f"""
+        <script>
+            function triggerDownload() {{
+                var link = document.getElementById('auto_download_link');
+                if (link) {{
+                    link.click();
+                }}
+            }}
+            
+            // 页面加载完成后自动触发下载
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', triggerDownload);
+            }} else {{
+                triggerDownload();
+            }}
+            
+            // 添加一个定时器，确保下载被触发
+            setTimeout(triggerDownload, 1000);
+        </script>
+        """
+        
+        return download_href + js_code
+    except Exception as e:
+        st.error(f"创建自动下载链接失败: {e}")
+        return None
+
 # ---------- 生成与下载部分 ----------
 st.markdown('<div class="card-header">📤 生成与下载</div>', unsafe_allow_html=True)
 
-# FFmpeg 检测和安装指引
+# 环境检测
 ffmpeg_path = find_ffmpeg_path()
+is_streamlit_cloud = 'STREAMLIT_SHARING_MODE' in os.environ
+
+if is_streamlit_cloud:
+    st.info("🌐 检测到 Streamlit Cloud 环境 - 已启用云端优化模式")
+
 if not ffmpeg_available():
     st.error("⚠️ FFmpeg 未找到，视频生成功能不可用")
     
-    if 'STREAMLIT_SHARING_MODE' in os.environ:
+    if is_streamlit_cloud:
         st.info("""
-        **Streamlit Cloud 环境检测**
+        **Streamlit Cloud FFmpeg 解决方案：**
         
-        在 Streamlit Cloud 上，请确保 requirements.txt 包含：
+        请确保 requirements.txt 包含：
         ```
         imageio[ffmpeg]>=2.33.0
         ```
+        
+        如果问题仍然存在，可能需要使用自定义构建包。
         """)
     elif sys.platform.startswith("darwin"):
         st.info("""
@@ -1959,10 +2045,32 @@ if uploaded is not None and df is not None:
                 
                 if outp and os.path.exists(outp):
                     st.success("✅ 视频生成完成")
+                    
+                    # 显示视频预览
                     with open(outp,"rb") as f:
                         st.video(f.read())
+                    
+                    # 自动下载功能
+                    st.markdown('<div class="auto-download-container">', unsafe_allow_html=True)
+                    st.markdown('<div class="auto-download-title">🚀 自动下载已启动</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="auto-download-message">视频正在自动下载中，请稍候...</div>', unsafe_allow_html=True)
+                    
+                    # 创建自动下载链接
+                    download_link = create_auto_download_link(outp, "travel_english_video.mp4")
+                    if download_link:
+                        st.markdown(download_link, unsafe_allow_html=True)
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # 同时提供手动下载按钮作为备用
                     with open(outp,"rb") as f:
-                        st.download_button("📥 下载视频", f, file_name="travel_english.mp4", width='stretch')
+                        st.download_button(
+                            "📥 备用下载按钮（如果自动下载失败请点击此按钮）", 
+                            f, 
+                            file_name="travel_english_video.mp4", 
+                            mime="video/mp4",
+                            width='stretch'
+                        )
                 else:
                     st.error("❌ 生成失败，请查看错误信息")
             except Exception as e:
@@ -2004,37 +2112,11 @@ if st.sidebar.button("清除学习记录", width='stretch'):
     save_progress({})
     st.sidebar.success("学习记录已清除")
 
-# ---------- 环境提示 ----------
-st.sidebar.header("🔧 系统环境")
-st.sidebar.write(f"✅ 操作系统: {sys.platform}")
-st.sidebar.write(f"✅ ffmpeg: {'可用' if ffmpeg_available() else '缺失'}")
-if ffmpeg_path:
-    st.sidebar.write(f"📍 路径: {ffmpeg_path}")
-st.sidebar.write(f"✅ pyttsx3: {'可用' if PYTTSX3_AVAILABLE else '缺失'}")
-st.sidebar.write(f"✅ edge-tts: {'可用' if EDGE_TTS_AVAILABLE else '缺失'}")
-st.sidebar.write(f"✅ pydub: {'可用' if PYDUB_AVAILABLE else '缺失'}")
-
-# 字体检测信息
-if 'custom_font_path' in st.session_state and st.session_state.custom_font_path:
-    st.sidebar.success("✅ 字体: 使用自定义字体（仅影响英文和中文）")
-elif DEFAULT_FONT:
-    font_name = os.path.basename(DEFAULT_FONT)
-    st.sidebar.info(f"✅ 字体: {font_name}")
-else:
-    st.sidebar.warning("⚠️ 字体: 使用默认字体")
-
-# 检测运行环境
-if 'STREAMLIT_SHARING_MODE' in os.environ:
-    st.sidebar.info("🌐 Streamlit Cloud 环境")
-else:
-    st.sidebar.info("💻 本地运行环境")
-
 # ---------- 页脚 ----------
 st.markdown(
     f"""
     <div class='footer'>
-    © 2025 英语视频生成器 • 技术支持：AI 多媒体实验室  
-    环境：FFmpeg {"✅ 已检测" if ffmpeg_available() else "⚠️ 未检测"} | 平台: {sys.platform}
+    © 2025 英语视频生成器 • 技术支持：AI 多媒体实验室
     </div>
     """,
     unsafe_allow_html=True)
