@@ -1,11 +1,11 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "NIXPACKS",
+    "buildCommand": "chmod +x setup_fonts.sh && ./setup_fonts.sh && pip install -r requirements.txt"
   },
   "deploy": {
     "startCommand": "streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0",
     "restartPolicyType": "ON_FAILURE"
   }
 }
-
