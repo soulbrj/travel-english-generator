@@ -38,102 +38,9 @@ CACHE_DIR = os.path.join(APP_TMP, "cache")
 SAMPLES_DIR = os.path.join(APP_TMP, "samples")
 TEMPLATE_DIR = os.path.join(APP_TMP, "templates")
 PROGRESS_FILE = os.path.join(APP_TMP, "learning_progress.json")
-FONT_DIR = os.path.join(APP_TMP, "fonts")  # 新增字体目录
 
-for p in (APP_TMP, CACHE_DIR, SAMPLES_DIR, TEMPLATE_DIR, FONT_DIR):
+for p in (APP_TMP, CACHE_DIR, SAMPLES_DIR, TEMPLATE_DIR):
     os.makedirs(p, exist_ok=True)
-
-# ---------- 字体处理 ----------
-# 确保中文字体可用
-def get_available_fonts():
-    """获取可用字体列表，优先确保中文字体"""
-    # 预定义一些常见的中文字体名称
-    chinese_fonts = [
-        "SimHei", "WenQuanYi Micro Hei", "Heiti TC",  # 黑体
-        "Microsoft YaHei", "Microsoft JhengHei",     # 微软雅黑
-        "SimSun", "NSimSun",                         # 宋体
-        "SimKai",                                    # 楷体
-        "SimFang",                                   # 仿宋
-    ]
-    
-    # 尝试从系统获取字体
-    try:
-        from matplotlib.font_manager import findSystemFonts, FontProperties
-        system_fonts = findSystemFonts()
-        available_fonts = []
-        for font_path in system_fonts:
-            try:
-                font_name = FontProperties(fname=font_path).get_name()
-                available_fonts.append((font_name, font_path))
-            except:
-                continue
-        
-        # 检查是否有可用的中文字体
-        for font_name in chinese_fonts:
-            for name, path in available_fonts:
-                if font_name.lower() in name.lower():
-                    return name, path
-        
-        # 如果没有找到中文字体，尝试使用默认字体
-        if available_fonts:
-            return available_fonts[0]
-    except:
-        pass
-    
-    # 如果所有方法都失败，尝试下载一个开源中文字体
-    return download_default_font()
-
-def download_default_font():
-    """下载一个默认的中文字体"""
-    try:
-        import requests
-        
-        # 选择一个开源中文字体（这里使用思源黑体）
-        font_url = "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf"
-        font_path = os.path.join(FONT_DIR, "SourceHanSansSC-Regular.otf")
-        
-        if not os.path.exists(font_path):
-            response = requests.get(font_url)
-            with open(font_path, 'wb') as f:
-                f.write(response.content)
-        
-        return "Source Han Sans SC", font_path
-    except:
-        # 如果下载失败，返回默认字体
-        return "Arial Unicode MS", None
-
-# 获取可用字体
-CHINESE_FONT_NAME, CHINESE_FONT_PATH = get_available_fonts()
-ENGLISH_FONT_NAME = "Charis SIL"
-PHONETIC_FONT_NAME = "Charis SIL"
-
-def get_font(size, font_type='chinese'):
-    """获取指定大小和类型的字体"""
-    try:
-        if font_type == 'chinese':
-            if CHINESE_FONT_PATH:
-                return ImageFont.truetype(CHINESE_FONT_PATH, size)
-            # 尝试使用系统中文字体
-            for font_name in ["SimHei", "WenQuanYi Micro Hei", "Heiti TC", "Microsoft YaHei"]:
-                try:
-                    return ImageFont.truetype(font_name, size)
-                except:
-                    continue
-        elif font_type == 'english':
-            try:
-                return ImageFont.truetype(ENGLISH_FONT_NAME, size)
-            except:
-                pass
-        elif font_type == 'phonetic':
-            try:
-                return ImageFont.truetype(PHONETIC_FONT_NAME, size)
-            except:
-                pass
-        
-        #  fallback to default font
-        return ImageFont.load_default()
-    except:
-        return ImageFont.load_default()
 
 # ---------- 可选依赖检测 ----------
 try:
@@ -243,7 +150,6 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Charis+SIL:wght@400;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
 
 :root {{
   --primary-light: {PRIMARY_LIGHT};
@@ -258,17 +164,17 @@ st.markdown(f"""
   --border-color: {BORDER_COLOR};
 }}
 
-/* 使用组合字体，确保中文显示 */
+/* 使用组合字体 */
 .english-text {{
     font-family: 'Charis SIL', 'Noto Sans SC', sans-serif;
 }}
 
 .phonetic-text {{
-    font-family: 'Charis SIL', 'Arial Unicode MS', 'Noto Sans SC', sans-serif;
+    font-family: 'Charis SIL', 'Arial Unicode MS', sans-serif;
 }}
 
 .chinese-text {{
-    font-family: 'Noto Sans SC', 'Noto Sans TC', 'Microsoft YaHei', 'Heiti TC', sans-serif;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
 }}
 
 .stApp {{
@@ -488,8 +394,21 @@ div.stButton > button:hover {{
   border: 1px solid rgba(99, 102, 241, 0.3);
   border-radius: 12px;
 }}
+
+/* 可滚动内容区域 */
+.scrollable-content {{
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 8px;
+}}
+
+.scrollable-content::-webkit-scrollbar {{
+  width: 6px;
+}}
+
+.scrollable-content::-webkit-scrollbar-track {{
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 3px;
+}}
 </style>
 """, unsafe_allow_html=True)
-
-# 以下是原代码中剩余的功能实现部分，保持不变
-# ...
