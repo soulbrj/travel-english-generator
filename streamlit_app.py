@@ -1726,31 +1726,45 @@ def clear_generated_videos():
         st.error(f"清除视频文件时出错: {e}")
         return 0
 
-# ---------- 优化后的视频合成函数 ----------
+# ---------- 修复后的音视频合并函数 ----------
 def merge_video_audio(video_path, audio_path, out_path):
-    """优化后的音视频合并函数 - 针对Streamlit Cloud环境"""
+    """针对 Streamlit Cloud 优化的音视频合并函数"""
     if not ffmpeg_available():
         raise RuntimeError("ffmpeg missing for merge_video_audio")
     
-    # 针对Streamlit Cloud环境的优化参数
+    # Streamlit Cloud 优化的参数
     cmd = [
         "ffmpeg", "-y", 
         "-i", video_path, 
         "-i", audio_path,
-        "-c:v", "libx264",      # 使用兼容性更好的视频编码
-        "-preset", "medium",    # 平衡速度和质量
-        "-crf", "23",           # 控制视频质量
-        "-c:a", "aac",          # 使用AAC音频编码
-        "-b:a", "192k",         # 音频比特率
-        "-ar", "44100",         # 音频采样率
-        "-ac", "2",             # 立体声
-        "-shortest", 
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "44100",
+        "-ac", "2",
+        "-movflags", "+faststart",  # 优化网络播放
+        "-shortest",
+        "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts",
         out_path
     ]
-    run_ffmpeg_command(cmd)
+    
+    try:
+        run_ffmpeg_command(cmd)
+        # 验证输出文件
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:  # 确保文件不为空
+            return True
+        else:
+            raise RuntimeError("Output video file is empty or missing")
+    except Exception as e:
+        st.error(f"音视频合并失败: {e}")
+        return False
 
+# ---------- 修复后的视频生成流程 ----------
 def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, progress_cb=None):
-    """整合生成流程 - 针对Streamlit Cloud优化的版本"""
+    """整合生成流程 - Streamlit Cloud 优化版本"""
     tmpdir = tempfile.mkdtemp(prefix="gen_")
     try:
         W,H = video_params.get("resolution",(1280,720))
@@ -1758,7 +1772,7 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
         
         frame_files = []
         audios = []
-        total_steps = len(rows) * len(audio_segments) + 2  # +2 用于音频合并和视频合成
+        total_steps = len(rows) * len(audio_segments) + 2
         step = 0
         
         for rid in rows:
@@ -1807,10 +1821,16 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
                 merged_audio = os.path.join(tmpdir, f"{rid}_merged.mp3")
                 try:
                     concat_audios_ffmpeg(seg_paths, merged_audio)
-                    audios.append(merged_audio)
+                    # 验证音频文件
+                    if os.path.exists(merged_audio) and os.path.getsize(merged_audio) > 0:
+                        audios.append(merged_audio)
+                    else:
+                        st.warning(f"行 {rid} 音频合并失败，使用静音替代")
+                        create_silent_mp3(merged_audio, total_audio_duration)
+                        audios.append(merged_audio)
                     
                     # 根据音频时长生成对应数量的帧
-                    frames_this_word = int(total_audio_duration * fps)
+                    frames_this_word = max(1, int(total_audio_duration * fps))
                     for i in range(frames_this_word):
                         fname = os.path.join(tmpdir, f"{rid}_{i:04d}.png")
                         img.save(fname)
@@ -1819,7 +1839,7 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
                 except Exception as e:
                     st.error(f"音频合并失败: {e}")
                     # 使用默认帧数作为备选
-                    frames_this_word = int(3.0 * fps)  # 默认3秒
+                    frames_this_word = max(1, int(3.0 * fps))
                     for i in range(frames_this_word):
                         fname = os.path.join(tmpdir, f"{rid}_{i:04d}.png")
                         img.save(fname)
@@ -1835,7 +1855,7 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
         with open(list_txt, "w", encoding="utf-8") as f:
             for p in frame_files:
                 f.write(f"file '{p}'\n")
-                f.write(f"duration {1.0/fps}\n")  # 每帧的持续时间
+                f.write(f"duration {1.0/fps}\n")
         
         video_no_audio = os.path.join(tmpdir, "video.mp4")
         
@@ -1844,15 +1864,18 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
             "ffmpeg", "-y", "-f", "concat", "-safe", "0", 
             "-i", list_txt, 
             "-r", str(fps), 
-            "-c:v", "libx264",      # 使用兼容性更好的视频编码
-            "-preset", "medium",    # 平衡速度和质量
-            "-crf", "23",           # 控制视频质量
-            "-pix_fmt", "yuv420p", 
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             video_no_audio
         ]
         
         try:
             run_ffmpeg_command(cmd)
+            if not os.path.exists(video_no_audio):
+                raise RuntimeError("视频文件未生成")
         except Exception as e:
             st.error(f"视频合成失败: {e}")
             return None
@@ -1862,31 +1885,46 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
             final_audio = os.path.join(tmpdir, "final_audio.mp3")
             try:
                 concat_audios_ffmpeg(audios, final_audio)
+                # 验证最终音频文件
+                if not os.path.exists(final_audio) or os.path.getsize(final_audio) == 0:
+                    st.warning("最终音频文件无效，创建静音音频")
+                    total_duration = sum([get_audio_duration(audio) for audio in audios])
+                    create_silent_mp3(final_audio, total_duration)
             except Exception as e:
                 st.error(f"最终音频合并失败: {e}")
-                return None
+                # 创建静音音频作为备选
+                total_duration = 3.0 * len(rows)  # 估算总时长
+                create_silent_mp3(final_audio, total_duration)
             
             # 合并音视频
             out_video = os.path.join(tmpdir, "final_out.mp4")
             try:
-                merge_video_audio(video_no_audio, final_audio, out_video)
+                success = merge_video_audio(video_no_audio, final_audio, out_video)
+                if not success:
+                    raise RuntimeError("音视频合并失败")
             except Exception as e:
                 st.error(f"音视频合并失败: {e}")
                 return None
         else:
             out_video = video_no_audio
         
-        if os.path.exists(out_video):
-            # 关键修复：将视频文件复制到永久位置
+        if os.path.exists(out_video) and os.path.getsize(out_video) > 1024:
+            # 将视频文件复制到永久位置
             permanent_video_path = os.path.join(CACHE_DIR, f"generated_video_{int(time.time())}.mp4")
             try:
                 shutil.copy2(out_video, permanent_video_path)
-                return permanent_video_path
+                
+                # 验证最终视频文件
+                if os.path.exists(permanent_video_path) and os.path.getsize(permanent_video_path) > 1024:
+                    return permanent_video_path
+                else:
+                    st.error("最终视频文件无效")
+                    return None
             except Exception as e:
-                # 如果复制失败，仍然返回原始路径
-                return out_video
+                st.error(f"视频文件复制失败: {e}")
+                return out_video  # 返回临时文件作为备选
         else:
-            st.error("输出视频文件不存在")
+            st.error("输出视频文件不存在或为空")
             return None
             
     except Exception as e:
@@ -1895,7 +1933,8 @@ def generate_video_pipeline(df, rows, style_conf, audio_segments, video_params, 
         st.error(f"详细错误: {traceback.format_exc()}")
         return None
     finally:
-        # 清理临时文件
+        # 延迟清理临时文件，确保文件已使用完毕
+        time.sleep(1)
         try:
             shutil.rmtree(tmpdir)
         except:
@@ -2016,6 +2055,45 @@ if uploaded is not None and df is not None:
     )
     
     if rows:
+        # 环境检测和调试信息
+        st.markdown("### 🔍 环境检测")
+        col_env1, col_env2, col_env3 = st.columns(3)
+        with col_env1:
+            st.info(f"FFmpeg: {'✅ 可用' if ffmpeg_available() else '❌ 不可用'}")
+        with col_env2:
+            st.info(f"Edge TTS: {'✅ 可用' if EDGE_TTS_AVAILABLE else '❌ 不可用'}")
+        with col_env3:
+            st.info(f"PyDub: {'✅ 可用' if PYDUB_AVAILABLE else '❌ 不可用'}")
+        
+        # 音频生成测试
+        if st.checkbox("运行音频生成测试", value=False):
+            st.markdown("#### 🎵 音频生成测试")
+            test_col1, test_col2 = st.columns(2)
+            with test_col1:
+                test_text = st.text_input("测试文本", value="Hello, this is a test audio.")
+            with test_col2:
+                test_voice = st.selectbox("测试音色", EN_FEMALE[:3])
+            
+            if st.button("运行测试", width='stretch'):
+                test_audio_path = os.path.join(CACHE_DIR, "test_audio.mp3")
+                with st.spinner("生成测试音频..."):
+                    test_success = generate_tts_cached(
+                        test_text, 
+                        "英文女声", 
+                        test_voice, 
+                        1.0, 
+                        "在线优先", 
+                        test_audio_path
+                    )
+                    if test_success and os.path.exists(test_audio_path):
+                        st.audio(test_audio_path, format="audio/mp3")
+                        st.success("✅ 音频生成测试成功")
+                        # 显示音频信息
+                        audio_duration = get_audio_duration(test_audio_path)
+                        st.info(f"音频时长: {audio_duration:.2f}秒")
+                    else:
+                        st.error("❌ 音频生成测试失败")
+        
         if st.button("▶️ 开始生成视频", width='stretch', disabled=not ffmpeg_available()):
             # 预检查
             if not ffmpeg_available():
