@@ -1,3 +1,4 @@
+# [file name]: streamlit_app.py
 import streamlit as st
 import pandas as pd
 import os
@@ -5,10 +6,9 @@ import json
 import time
 import base64
 from datetime import datetime
-import numpy as np
 from pathlib import Path
 
-# 设置页面配置
+# 页面配置
 st.set_page_config(
     page_title="旅游英语视频课件生成器",
     page_icon="🎬",
@@ -16,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 添加自定义CSS样式
+# 自定义CSS样式
 st.markdown("""
 <style>
     .main-header {
@@ -84,16 +84,6 @@ st.markdown("""
         width: 100%;
         transition: all 0.3s ease;
     }
-    .stDownloadButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
-    }
-    .progress-container {
-        background-color: #F3F4F6;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 20px 0;
-    }
     .sentence-card {
         background-color: white;
         border-radius: 10px;
@@ -101,27 +91,6 @@ st.markdown("""
         margin: 10px 0;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         border-left: 4px solid #3B82F6;
-    }
-    .config-card {
-        background-color: white;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border: 1px solid #E5E7EB;
-    }
-    .tab-content {
-        padding: 20px 0;
-    }
-    /* 响应式调整 */
-    @media (max-width: 768px) {
-        .main-header {
-            font-size: 1.5rem;
-            padding: 15px;
-        }
-        .config-card {
-            padding: 10px;
-        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -135,8 +104,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 初始化会话状态
-if 'environment_checked' not in st.session_state:
-    st.session_state.environment_checked = False
 if 'generating' not in st.session_state:
     st.session_state.generating = False
 if 'progress' not in st.session_state:
@@ -149,12 +116,50 @@ if 'current_step' not in st.session_state:
     st.session_state.current_step = ""
 if 'df' not in st.session_state:
     st.session_state.df = None
-if 'sample_data_used' not in st.session_state:
-    st.session_state.sample_data_used = False
 if 'generation_report' not in st.session_state:
     st.session_state.generation_report = ""
+if 'example_data' not in st.session_state:
+    # 创建示例数据
+    st.session_state.example_data = {
+        '英语': [
+            'Where is the gate?',
+            'Window seat, please.',
+            'Aisle seat, please.',
+            'Check in, please.',
+            'How many bags?',
+            'Is it overweight?',
+            'Take off shoes.',
+            'Where is luggage?',
+            'Boarding pass, please.',
+            'Any delay?'
+        ],
+        '中文': [
+            '登机口在哪？',
+            '请给我靠窗座位。',
+            '请给我过道座位。',
+            '办理登机手续。',
+            '要托运几件行李？',
+            '超重了吗？',
+            '请脱鞋。',
+            '行李在哪里？',
+            '请出示登机牌。',
+            '航班延误吗？'
+        ],
+        '音标': [
+            '/weə ɪz ðə ɡeɪt/',
+            '/ˈwɪndəʊ siːt pliːz/',
+            '/ˈaɪl siːt pliːz/',
+            '/tʃek ɪn pliːz/',
+            '/haʊ ˈmeni bæɡz/',
+            '/ɪz ɪt ˌəʊvəˈweɪt/',
+            '/teɪk ɔːf ʃuːz/',
+            '/weə ɪz ˈlʌɡɪdʒ/',
+            '/ˈbɔːdɪŋ pɑːs pliːz/',
+            '/ˈeni dɪˈleɪ/'
+        ]
+    }
 
-# 音频模式说明
+# 配置选项
 AUDIO_MODES = {
     "完整模式 (5遍)": {
         "description": "每组句子包含5个朗读版本：女生英语(慢)-男生英语(慢)-女生英语(慢)-男生中文-男生英语(慢)",
@@ -170,26 +175,23 @@ AUDIO_MODES = {
     }
 }
 
-# 视频分辨率选项
 RESOLUTIONS = {
     "1920x1080 (全高清)": (1920, 1080),
     "1280x720 (高清)": (1280, 720),
     "854x480 (标清)": (854, 480)
 }
 
-# 侧边栏配置
+# 侧边栏
 with st.sidebar:
     st.markdown("### ⚙️ 视频配置")
     
-    # 视频分辨率
     selected_resolution = st.selectbox(
         "📺 视频分辨率",
         list(RESOLUTIONS.keys()),
         index=0,
-        help="选择视频的分辨率，分辨率越高文件越大"
+        help="选择视频的分辨率"
     )
     
-    # 音频模式
     selected_audio_mode = st.selectbox(
         "🔊 音频模式",
         list(AUDIO_MODES.keys()),
@@ -197,38 +199,25 @@ with st.sidebar:
         help="选择音频的朗读模式"
     )
     
-    # 显示当前选择的音频模式说明
     st.markdown(f"""
-    <div class="config-card">
+    <div style="background-color: white; border-radius: 10px; padding: 15px; margin: 10px 0; border: 1px solid #E5E7EB;">
         <strong>当前模式:</strong> {selected_audio_mode}<br>
         <small>{AUDIO_MODES[selected_audio_mode]['description']}</small>
     </div>
     """, unsafe_allow_html=True)
     
-    # 字幕样式
     st.markdown("---")
     st.markdown("### 🔤 字幕设置")
     
-    font_size = st.slider(
-        "字体大小",
-        min_value=16,
-        max_value=60,
-        value=36,
-        help="字幕字体大小"
-    )
-    
+    font_size = st.slider("字体大小", 16, 60, 36)
     english_color = st.color_picker("英语颜色", "#FFFFFF")
     chinese_color = st.color_picker("中文颜色", "#00FFFF")
     phonetic_color = st.color_picker("音标颜色", "#FFFF00")
     
-    # 背景设置
     st.markdown("---")
     st.markdown("### 🎨 背景设置")
     
-    background_type = st.radio(
-        "背景类型",
-        ["纯色背景", "渐变背景", "图片背景"]
-    )
+    background_type = st.radio("背景类型", ["纯色背景", "渐变背景", "图片背景"])
     
     if background_type == "纯色背景":
         bg_color = st.color_picker("背景颜色", "#000000")
@@ -241,16 +230,14 @@ with st.sidebar:
     else:
         bg_image = st.file_uploader("上传背景图片", type=['jpg', 'jpeg', 'png'])
     
-    # 生成设置
     st.markdown("---")
     st.markdown("### ⚡ 生成设置")
     
-    include_silence = st.checkbox("包含句子间静默", value=True, help="在每个句子之间添加800ms的静默间隔")
+    include_silence = st.checkbox("包含句子间静默", value=True)
     silence_duration = st.slider("静默时长(ms)", 200, 2000, 800, disabled=not include_silence)
-    
-    slow_rate = st.slider("慢速比例(%)", -50, 50, -20, help="负值表示减慢，正值表示加快")
+    slow_rate = st.slider("慢速比例(%)", -50, 50, -20)
 
-# 主界面标签页
+# 主标签页
 tab1, tab2, tab3, tab4 = st.tabs(["📁 数据管理", "⚙️ 生成设置", "🎬 视频生成", "📥 结果下载"])
 
 with tab1:
@@ -259,7 +246,6 @@ with tab1:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # 数据上传区域
         uploaded_file = st.file_uploader(
             "上传Excel文件",
             type=['xlsx', 'xls'],
@@ -267,52 +253,12 @@ with tab1:
         )
     
     with col2:
-        # 使用示例数据
         if st.button("使用示例数据", use_container_width=True):
-            # 创建示例数据
-            example_data = {
-                '英语': [
-                    'Where is the gate?',
-                    'Window seat, please.',
-                    'Aisle seat, please.',
-                    'Check in, please.',
-                    'How many bags?',
-                    'Is it overweight?',
-                    'Take off shoes.',
-                    'Where is luggage?',
-                    'Boarding pass, please.',
-                    'Any delay?'
-                ],
-                '中文': [
-                    '登机口在哪？',
-                    '请给我靠窗座位。',
-                    '请给我过道座位。',
-                    '办理登机手续。',
-                    '要托运几件行李？',
-                    '超重了吗？',
-                    '请脱鞋。',
-                    '行李在哪里？',
-                    '请出示登机牌。',
-                    '航班延误吗？'
-                ],
-                '音标': [
-                    '/weə ɪz ðə ɡeɪt/',
-                    '/ˈwɪndəʊ siːt pliːz/',
-                    '/ˈaɪl siːt pliːz/',
-                    '/tʃek ɪn pliːz/',
-                    '/haʊ ˈmeni bæɡz/',
-                    '/ɪz ɪt ˌəʊvəˈweɪt/',
-                    '/teɪk ɔːf ʃuːz/',
-                    '/weə ɪz ˈlʌɡɪdʒ/',
-                    '/ˈbɔːdɪŋ pɑːs pliːz/',
-                    '/ˈeni dɪˈleɪ/'
-                ]
-            }
-            st.session_state.df = pd.DataFrame(example_data)
-            st.session_state.sample_data_used = True
+            st.session_state.df = pd.DataFrame(st.session_state.example_data)
             st.success("✅ 已加载示例数据")
+            st.rerun()
     
-    # 显示数据
+    # 处理上传的文件
     if uploaded_file is not None:
         try:
             df = pd.read_excel(uploaded_file)
@@ -321,13 +267,14 @@ with tab1:
         except Exception as e:
             st.error(f"读取文件失败: {str(e)}")
     
+    # 显示数据
     if st.session_state.df is not None:
         st.markdown(f"#### 数据预览 (共 {len(st.session_state.df)} 条)")
         
         # 显示数据表格
         st.dataframe(st.session_state.df, use_container_width=True)
         
-        # 显示统计信息
+        # 统计信息
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("英语句子", len(st.session_state.df))
@@ -335,27 +282,20 @@ with tab1:
             total_words = sum(len(str(s).split()) for s in st.session_state.df['英语'])
             st.metric("总单词数", total_words)
         with col3:
-            avg_length = np.mean([len(str(s)) for s in st.session_state.df['英语']])
+            avg_length = sum(len(str(s)) for s in st.session_state.df['英语']) / len(st.session_state.df)
             st.metric("平均长度", f"{avg_length:.1f}字符")
         
-        # 保存数据按钮
+        # 下载数据按钮
         if st.button("💾 下载数据"):
-            try:
-                # 保存到临时文件
-                temp_file = "旅游英语数据.xlsx"
-                st.session_state.df.to_excel(temp_file, index=False)
-                
-                # 提供下载
-                with open(temp_file, "rb") as f:
-                    st.download_button(
-                        label="下载Excel文件",
-                        data=f,
-                        file_name="旅游英语数据.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            except Exception as e:
-                st.error(f"保存失败: {str(e)}")
-    
+            # 将数据转换为CSV格式供下载
+            csv = st.session_state.df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="下载CSV文件",
+                data=csv,
+                file_name="旅游英语数据.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
     else:
         st.info("👆 请上传Excel文件或使用示例数据开始")
 
@@ -365,48 +305,43 @@ with tab2:
     if st.session_state.df is None:
         st.warning("⚠️ 请先在【数据管理】标签页上传或创建数据")
     else:
-        # 句子选择器
-        st.markdown("#### 选择生成范围")
-        
         total_sentences = len(st.session_state.df)
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            start_idx = st.number_input(
-                "起始句子",
-                min_value=1,
-                max_value=total_sentences,
-                value=1
-            )
-        
+            start_idx = st.number_input("起始句子", 1, total_sentences, 1)
         with col2:
-            end_idx = st.number_input(
-                "结束句子",
-                min_value=1,
-                max_value=total_sentences,
-                value=min(10, total_sentences)
-            )
-        
+            end_idx = st.number_input("结束句子", 1, total_sentences, min(10, total_sentences))
         with col3:
             selected_count = end_idx - start_idx + 1
             estimated_time = selected_count * AUDIO_MODES[selected_audio_mode]['steps'] * 3
             st.metric("生成句子数", selected_count)
             st.caption(f"预计时间: {estimated_time}秒")
         
+        # 保存配置到会话状态
+        st.session_state.config = {
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'selected_count': selected_count,
+            'selected_resolution': selected_resolution,
+            'selected_audio_mode': selected_audio_mode,
+            'font_size': font_size,
+            'english_color': english_color,
+            'chinese_color': chinese_color,
+            'phonetic_color': phonetic_color
+        }
+        
         # 预览选中的句子
         st.markdown("#### 预览选中的句子")
         
         if start_idx <= end_idx:
-            preview_df = st.session_state.df.iloc[start_idx-1:end_idx].copy()
-            preview_df.index = range(start_idx, end_idx + 1)
-            
-            # 显示句子卡片
-            for idx, row in preview_df.iterrows():
+            for i in range(start_idx-1, end_idx):
+                row = st.session_state.df.iloc[i]
                 with st.container():
                     st.markdown(f"""
                     <div class="sentence-card">
-                        <strong>句子 #{idx}</strong><br>
+                        <strong>句子 #{i+1}</strong><br>
                         <span style="color: white; font-size: 18px;">{row['英语']}</span><br>
                         <span style="color: cyan; font-size: 16px;">{row['中文']}</span><br>
                         <span style="color: yellow; font-size: 14px;">{row['音标']}</span>
@@ -419,18 +354,16 @@ with tab3:
     if st.session_state.df is None:
         st.warning("⚠️ 请先在【数据管理】标签页上传或创建数据")
     else:
-        # 生成控制面板
+        config = st.session_state.config
+        estimated_time = config['selected_count'] * AUDIO_MODES[selected_audio_mode]['steps'] * 3
+        
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            total_sentences = len(st.session_state.df)
-            selected_count = end_idx - start_idx + 1
-            estimated_time = selected_count * AUDIO_MODES[selected_audio_mode]['steps'] * 3
-            
             st.markdown(f"""
             <div class="info-box">
                 <h4>生成信息</h4>
-                • 总句子数: {selected_count} 句<br>
+                • 总句子数: {config['selected_count']} 句<br>
                 • 音频模式: {selected_audio_mode}<br>
                 • 分辨率: {selected_resolution}<br>
                 • 预计时长: 约 {estimated_time} 秒
@@ -438,77 +371,61 @@ with tab3:
             """, unsafe_allow_html=True)
         
         with col2:
-            generate_disabled = st.session_state.generating
-            
             if st.button("🚀 开始生成", 
-                        disabled=generate_disabled,
+                        disabled=st.session_state.generating,
                         use_container_width=True,
                         type="primary"):
                 st.session_state.generating = True
                 st.session_state.progress = 0
                 st.session_state.video_ready = False
                 st.session_state.current_step = "初始化"
+                st.rerun()
         
-        # 进度显示区域
+        # 进度显示
         if st.session_state.generating:
             st.markdown("""
-            <div class="progress-container">
+            <div style="background-color: #F3F4F6; border-radius: 10px; padding: 20px; margin: 20px 0;">
                 <h4>⏳ 生成进度</h4>
             </div>
             """, unsafe_allow_html=True)
             
-            # 进度条
             progress_bar = st.progress(st.session_state.progress)
-            
-            # 状态文本
             status_text = st.empty()
-            status_text.text(f"🔄 {st.session_state.current_step}")
             
-            # 模拟生成过程
+            # 模拟生成步骤
             steps = [
-                ("初始化生成环境...", 5),
-                ("处理数据文件...", 10),
-                ("生成TTS音频文件...", 25),
-                ("合成音频序列...", 40),
-                ("创建视频帧...", 60),
-                ("添加字幕效果...", 75),
-                ("编码视频文件...", 90),
+                ("初始化生成环境...", 10),
+                ("处理数据文件...", 20),
+                ("生成音频文件...", 40),
+                ("合成音频序列...", 60),
+                ("创建视频帧...", 80),
+                ("导出视频文件...", 95),
                 ("完成生成...", 100)
             ]
             
-            # 使用placeholder模拟进度
-            placeholder = st.empty()
-            
-            for step_text, step_progress in steps:
-                time.sleep(1.5)  # 模拟处理时间
+            # 模拟进度更新
+            for i, (step_text, step_progress) in enumerate(steps):
+                time.sleep(1.5)
                 st.session_state.current_step = step_text
                 st.session_state.progress = step_progress
                 progress_bar.progress(step_progress / 100)
                 status_text.text(f"🔄 {step_text}")
             
             # 完成生成
-            time.sleep(1)
-            
-            # 创建模拟视频文件
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_dir = "output_videos"
             os.makedirs(output_dir, exist_ok=True)
             
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 创建模拟视频文件
             video_filename = f"旅游英语视频_{timestamp}.mp4"
             video_path = os.path.join(output_dir, video_filename)
             
-            # 创建模拟视频文件内容
             with open(video_path, 'w') as f:
-                f.write("模拟视频文件 - 这是模拟的视频文件内容\n")
+                f.write(f"模拟视频文件 - 旅游英语学习视频\n")
                 f.write(f"生成时间: {timestamp}\n")
-                f.write(f"句子数: {selected_count}\n")
+                f.write(f"句子数: {config['selected_count']}\n")
                 f.write(f"分辨率: {selected_resolution}\n")
                 f.write(f"音频模式: {selected_audio_mode}\n")
-            
-            # 更新会话状态
-            st.session_state.video_path = video_path
-            st.session_state.video_ready = True
-            st.session_state.generating = False
             
             # 生成报告
             report_content = f"""
@@ -516,7 +433,7 @@ with tab3:
             =====================
             生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
             视频文件: {video_filename}
-            句子范围: {start_idx} - {end_idx} (共{selected_count}句)
+            句子范围: {config['start_idx']} - {config['end_idx']} (共{config['selected_count']}句)
             分辨率: {selected_resolution}
             音频模式: {selected_audio_mode}
             字幕设置:
@@ -528,20 +445,21 @@ with tab3:
             生成句子列表:
             """
             
-            for i in range(start_idx-1, end_idx):
-                eng = st.session_state.df.iloc[i]['英语']
-                chn = st.session_state.df.iloc[i]['中文']
-                pho = st.session_state.df.iloc[i]['音标']
-                report_content += f"\n{i+1}. {eng}\n   中文: {chn}\n   音标: {pho}\n"
+            for i in range(config['start_idx']-1, config['end_idx']):
+                row = st.session_state.df.iloc[i]
+                report_content += f"\n{i+1}. {row['英语']}"
+                report_content += f"\n   中文: {row['中文']}"
+                report_content += f"\n   音标: {row['音标']}\n"
             
+            # 更新会话状态
+            st.session_state.video_path = video_path
+            st.session_state.video_ready = True
+            st.session_state.generating = False
             st.session_state.generation_report = report_content
             
-            # 显示完成消息
             st.success("✅ 视频生成完成！")
             st.balloons()
-            
-            # 自动跳转到下载标签页
-            st.markdown('<meta http-equiv="refresh" content="2;url=#结果下载">', unsafe_allow_html=True)
+            st.rerun()
         
         elif st.session_state.video_ready:
             st.markdown("""
@@ -555,26 +473,19 @@ with tab4:
     st.markdown("### 📥 结果下载")
     
     if st.session_state.video_ready and st.session_state.video_path:
-        # 视频信息卡片
+        # 视频信息
         col1, col2, col3 = st.columns(3)
         
         with col1:
             st.metric("视频文件", "旅游英语学习视频.mp4")
-        
         with col2:
             if os.path.exists(st.session_state.video_path):
                 file_size = os.path.getsize(st.session_state.video_path)
                 st.metric("文件大小", f"{file_size/1024:.1f} KB")
             else:
                 st.metric("文件大小", "模拟文件")
-        
         with col3:
             st.metric("生成时间", datetime.now().strftime("%H:%M"))
-        
-        # 视频预览区域
-        st.markdown("#### 🎬 视频预览")
-        
-        st.info("🎥 视频预览功能（实际应用中这里会显示生成的视频）")
         
         # 下载区域
         st.markdown("#### 📥 下载文件")
@@ -592,8 +503,6 @@ with tab4:
                         mime="video/mp4",
                         use_container_width=True
                     )
-            else:
-                st.warning("视频文件不存在")
         
         with col2:
             # 下载报告按钮
@@ -605,13 +514,15 @@ with tab4:
                 use_container_width=True
             )
         
-        # 其他格式导出
+        # 其他导出选项
         st.markdown("#### 🔄 其他格式")
         
         if st.button("导出数据JSON", use_container_width=True):
             # 导出数据为JSON
             export_data = {
-                "sentences": st.session_state.df.iloc[start_idx-1:end_idx].to_dict('records'),
+                "sentences": st.session_state.df.iloc[
+                    st.session_state.config['start_idx']-1:st.session_state.config['end_idx']
+                ].to_dict('records'),
                 "config": {
                     "resolution": selected_resolution,
                     "audio_mode": selected_audio_mode,
@@ -624,7 +535,6 @@ with tab4:
             }
             
             json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
-            
             st.download_button(
                 label="📄 下载JSON数据",
                 data=json_str,
