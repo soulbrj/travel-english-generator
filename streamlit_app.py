@@ -1,16 +1,11 @@
 import streamlit as st
 import pandas as pd
 import os
-import sys
-import asyncio
 import json
 import time
 import base64
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
 import numpy as np
-import tempfile
-import shutil
 from pathlib import Path
 
 # 设置页面配置
@@ -254,26 +249,6 @@ with st.sidebar:
     silence_duration = st.slider("静默时长(ms)", 200, 2000, 800, disabled=not include_silence)
     
     slow_rate = st.slider("慢速比例(%)", -50, 50, -20, help="负值表示减慢，正值表示加快")
-    
-    # 环境检查
-    st.markdown("---")
-    st.markdown("### 🔧 系统状态")
-    
-    if st.button("检查环境"):
-        with st.spinner("检查依赖包..."):
-            try:
-                import pandas as pd
-                import openpyxl
-                import pydub
-                import edge_tts
-                import moviepy
-                import numpy as np
-                from PIL import Image
-                st.success("✅ 环境检查通过")
-                st.session_state.environment_checked = True
-            except ImportError as e:
-                st.error(f"缺少依赖包: {e}")
-                st.info("请运行: pip install -r requirements_streamlit.txt")
 
 # 主界面标签页
 tab1, tab2, tab3, tab4 = st.tabs(["📁 数据管理", "⚙️ 生成设置", "🎬 视频生成", "📥 结果下载"])
@@ -349,39 +324,26 @@ with tab1:
     if st.session_state.df is not None:
         st.markdown(f"#### 数据预览 (共 {len(st.session_state.df)} 条)")
         
-        # 可编辑的数据表格
-        edited_df = st.data_editor(
-            st.session_state.df,
-            use_container_width=True,
-            num_rows="dynamic",
-            column_config={
-                "英语": st.column_config.TextColumn("英语", width="large"),
-                "中文": st.column_config.TextColumn("中文", width="medium"),
-                "音标": st.column_config.TextColumn("音标", width="medium")
-            }
-        )
-        
-        # 更新会话状态中的数据
-        st.session_state.df = edited_df
+        # 显示数据表格
+        st.dataframe(st.session_state.df, use_container_width=True)
         
         # 显示统计信息
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("英语句子", len(edited_df))
+            st.metric("英语句子", len(st.session_state.df))
         with col2:
-            total_words = sum(len(str(s).split()) for s in edited_df['英语'])
+            total_words = sum(len(str(s).split()) for s in st.session_state.df['英语'])
             st.metric("总单词数", total_words)
         with col3:
-            avg_length = np.mean([len(str(s)) for s in edited_df['英语']])
+            avg_length = np.mean([len(str(s)) for s in st.session_state.df['英语']])
             st.metric("平均长度", f"{avg_length:.1f}字符")
         
         # 保存数据按钮
-        if st.button("💾 保存数据"):
+        if st.button("💾 下载数据"):
             try:
                 # 保存到临时文件
-                temp_file = "temp_data.xlsx"
-                edited_df.to_excel(temp_file, index=False)
-                st.success(f"✅ 数据已保存到 {temp_file}")
+                temp_file = "旅游英语数据.xlsx"
+                st.session_state.df.to_excel(temp_file, index=False)
                 
                 # 提供下载
                 with open(temp_file, "rb") as f:
@@ -450,67 +412,6 @@ with tab2:
                         <span style="color: yellow; font-size: 14px;">{row['音标']}</span>
                     </div>
                     """, unsafe_allow_html=True)
-        
-        # 高级设置
-        with st.expander("高级设置", expanded=False):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                output_fps = st.number_input("视频帧率(FPS)", 10, 60, 24)
-                audio_bitrate = st.selectbox(
-                    "音频比特率",
-                    ["64k", "128k", "192k", "256k", "320k"],
-                    index=2
-                )
-            
-            with col2:
-                video_bitrate = st.selectbox(
-                    "视频比特率",
-                    ["1M", "2M", "5M", "8M", "10M"],
-                    index=2
-                )
-                enable_watermark = st.checkbox("添加水印", value=False)
-                
-                if enable_watermark:
-                    watermark_text = st.text_input("水印文字", "旅游英语学习")
-        
-        # 生成预览
-        st.markdown("#### 视频预览效果")
-        
-        # 创建一个预览图
-        try:
-            # 使用PIL创建预览图
-            width, height = RESOLUTIONS[selected_resolution]
-            
-            # 创建预览图像
-            preview_img = Image.new('RGB', (width // 4, height // 4), color='black')
-            draw = ImageDraw.Draw(preview_img)
-            
-            # 绘制文本
-            sample_text = "Where is the gate?"
-            sample_chinese = "登机口在哪？"
-            sample_phonetic = "/weə ɪz ðə ɡeɪt/"
-            
-            # 计算文本位置
-            center_x = preview_img.width // 2
-            
-            # 绘制英语
-            english_y = preview_img.height // 4
-            draw.text((center_x, english_y), sample_text, fill=english_color, anchor="mm")
-            
-            # 绘制音标
-            phonetic_y = english_y + 30
-            draw.text((center_x, phonetic_y), sample_phonetic, fill=phonetic_color, anchor="mm")
-            
-            # 绘制中文
-            chinese_y = phonetic_y + 30
-            draw.text((center_x, chinese_y), sample_chinese, fill=chinese_color, anchor="mm")
-            
-            # 显示预览图
-            st.image(preview_img, caption="字幕预览效果", use_column_width=True)
-            
-        except Exception as e:
-            st.warning(f"预览图生成失败: {str(e)}")
 
 with tab3:
     st.markdown("### 🎬 视频生成")
@@ -523,7 +424,7 @@ with tab3:
         
         with col1:
             total_sentences = len(st.session_state.df)
-            selected_count = end_idx - start_idx + 1 if 'end_idx' in locals() else min(10, total_sentences)
+            selected_count = end_idx - start_idx + 1
             estimated_time = selected_count * AUDIO_MODES[selected_audio_mode]['steps'] * 3
             
             st.markdown(f"""
@@ -547,7 +448,6 @@ with tab3:
                 st.session_state.progress = 0
                 st.session_state.video_ready = False
                 st.session_state.current_step = "初始化"
-                st.rerun()
         
         # 进度显示区域
         if st.session_state.generating:
@@ -558,7 +458,7 @@ with tab3:
             """, unsafe_allow_html=True)
             
             # 进度条
-            progress_bar = st.progress(st.session_state.progress / 100)
+            progress_bar = st.progress(st.session_state.progress)
             
             # 状态文本
             status_text = st.empty()
@@ -576,78 +476,72 @@ with tab3:
                 ("完成生成...", 100)
             ]
             
-            # 在单独的函数中模拟进度更新
-            def simulate_progress():
-                for step_text, step_progress in steps:
-                    time.sleep(1.5)  # 模拟处理时间
-                    st.session_state.current_step = step_text
-                    st.session_state.progress = step_progress
+            # 使用placeholder模拟进度
+            placeholder = st.empty()
             
-            # 使用st.empty()创建占位符并更新
-            import threading
+            for step_text, step_progress in steps:
+                time.sleep(1.5)  # 模拟处理时间
+                st.session_state.current_step = step_text
+                st.session_state.progress = step_progress
+                progress_bar.progress(step_progress / 100)
+                status_text.text(f"🔄 {step_text}")
             
-            def run_simulation():
-                simulate_progress()
-                
-                # 完成生成
-                time.sleep(1)
-                
-                # 创建模拟视频文件
-                output_dir = "output_videos"
-                os.makedirs(output_dir, exist_ok=True)
-                
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                video_filename = f"旅游英语视频_{timestamp}.mp4"
-                video_path = os.path.join(output_dir, video_filename)
-                
-                # 创建模拟视频文件内容
-                with open(video_path, 'w') as f:
-                    f.write("Simulated video file - 这是模拟的视频文件内容\n")
-                    f.write(f"生成时间: {timestamp}\n")
-                    f.write(f"句子数: {selected_count}\n")
-                    f.write(f"分辨率: {selected_resolution}\n")
-                    f.write(f"音频模式: {selected_audio_mode}\n")
-                
-                # 更新会话状态
-                st.session_state.video_path = video_path
-                st.session_state.video_ready = True
-                st.session_state.generating = False
-                
-                # 生成报告
-                report_content = f"""
-                视频生成报告
-                =====================
-                生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                视频文件: {video_filename}
-                句子范围: {start_idx} - {end_idx} (共{selected_count}句)
-                分辨率: {selected_resolution}
-                音频模式: {selected_audio_mode}
-                字幕设置:
-                  - 英语颜色: {english_color}
-                  - 中文颜色: {chinese_color}
-                  - 音标颜色: {phonetic_color}
-                  - 字体大小: {font_size}
-                
-                生成句子列表:
-                """
-                
-                for i in range(start_idx-1, end_idx):
-                    eng = st.session_state.df.iloc[i]['英语']
-                    chn = st.session_state.df.iloc[i]['中文']
-                    pho = st.session_state.df.iloc[i]['音标']
-                    report_content += f"\n{i+1}. {eng}\n   中文: {chn}\n   音标: {pho}\n"
-                
-                st.session_state.generation_report = report_content
-                
-                # 重新运行以更新UI
-                st.rerun()
+            # 完成生成
+            time.sleep(1)
             
-            # 在新线程中运行模拟
-            if not hasattr(st.session_state, 'simulation_started'):
-                st.session_state.simulation_started = True
-                import threading
-                thread = threading.Thread(target=run_simulation)
-                thread.start()
+            # 创建模拟视频文件
+            output_dir = "output_videos"
+            os.makedirs(output_dir, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            video_filename = f"旅游英语视频_{timestamp}.mp4"
+            video_path = os.path.join(output_dir, video_filename)
+            
+            # 创建模拟视频文件内容
+            with open(video_path, 'w') as f:
+                f.write("模拟视频文件 - 这是模拟的视频文件内容\n")
+                f.write(f"生成时间: {timestamp}\n")
+                f.write(f"句子数: {selected_count}\n")
+                f.write(f"分辨率: {selected_resolution}\n")
+                f.write(f"音频模式: {selected_audio_mode}\n")
+            
+            # 更新会话状态
+            st.session_state.video_path = video_path
+            st.session_state.video_ready = True
+            st.session_state.generating = False
+            
+            # 生成报告
+            report_content = f"""
+            视频生成报告
+            =====================
+            生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            视频文件: {video_filename}
+            句子范围: {start_idx} - {end_idx} (共{selected_count}句)
+            分辨率: {selected_resolution}
+            音频模式: {selected_audio_mode}
+            字幕设置:
+              - 英语颜色: {english_color}
+              - 中文颜色: {chinese_color}
+              - 音标颜色: {phonetic_color}
+              - 字体大小: {font_size}
+            
+            生成句子列表:
+            """
+            
+            for i in range(start_idx-1, end_idx):
+                eng = st.session_state.df.iloc[i]['英语']
+                chn = st.session_state.df.iloc[i]['中文']
+                pho = st.session_state.df.iloc[i]['音标']
+                report_content += f"\n{i+1}. {eng}\n   中文: {chn}\n   音标: {pho}\n"
+            
+            st.session_state.generation_report = report_content
+            
+            # 显示完成消息
+            st.success("✅ 视频生成完成！")
+            st.balloons()
+            
+            # 自动跳转到下载标签页
+            st.markdown('<meta http-equiv="refresh" content="2;url=#结果下载">', unsafe_allow_html=True)
         
         elif st.session_state.video_ready:
             st.markdown("""
@@ -680,22 +574,7 @@ with tab4:
         # 视频预览区域
         st.markdown("#### 🎬 视频预览")
         
-        # 在实际应用中，这里会显示真正的视频预览
-        # 这里我们显示一个占位符
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                    height: 400px; 
-                    border-radius: 15px; 
-                    display: flex; 
-                    align-items: center; 
-                    justify-content: center;
-                    color: white;
-                    font-size: 24px;
-                    margin: 20px 0;">
-            🎬 视频预览区域<br>
-            <small style="font-size: 16px;">(实际应用中这里会显示生成的视频)</small>
-        </div>
-        """, unsafe_allow_html=True)
+        st.info("🎥 视频预览功能（实际应用中这里会显示生成的视频）")
         
         # 下载区域
         st.markdown("#### 📥 下载文件")
@@ -729,55 +608,30 @@ with tab4:
         # 其他格式导出
         st.markdown("#### 🔄 其他格式")
         
-        export_col1, export_col2, export_col3 = st.columns(3)
-        
-        with export_col1:
-            if st.button("导出音频MP3", use_container_width=True):
-                st.info("音频导出功能开发中...")
-        
-        with export_col2:
-            if st.button("导出字幕SRT", use_container_width=True):
-                st.info("字幕导出功能开发中...")
-        
-        with export_col3:
-            if st.button("导出数据JSON", use_container_width=True):
-                # 导出数据为JSON
-                export_data = {
-                    "sentences": st.session_state.df.iloc[start_idx-1:end_idx].to_dict('records'),
-                    "config": {
-                        "resolution": selected_resolution,
-                        "audio_mode": selected_audio_mode,
-                        "colors": {
-                            "english": english_color,
-                            "chinese": chinese_color,
-                            "phonetic": phonetic_color
-                        }
+        if st.button("导出数据JSON", use_container_width=True):
+            # 导出数据为JSON
+            export_data = {
+                "sentences": st.session_state.df.iloc[start_idx-1:end_idx].to_dict('records'),
+                "config": {
+                    "resolution": selected_resolution,
+                    "audio_mode": selected_audio_mode,
+                    "colors": {
+                        "english": english_color,
+                        "chinese": chinese_color,
+                        "phonetic": phonetic_color
                     }
                 }
-                
-                json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
-                
-                st.download_button(
-                    label="📄 下载JSON数据",
-                    data=json_str,
-                    file_name="旅游英语数据.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
-        
-        # 分享功能
-        st.markdown("---")
-        st.markdown("#### 📤 分享")
-        
-        share_col1, share_col2 = st.columns(2)
-        
-        with share_col1:
-            if st.button("复制分享链接", use_container_width=True):
-                st.success("链接已复制到剪贴板！")
-        
-        with share_col2:
-            if st.button("保存到云端", use_container_width=True):
-                st.info("云存储功能开发中...")
+            }
+            
+            json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
+            
+            st.download_button(
+                label="📄 下载JSON数据",
+                data=json_str,
+                file_name="旅游英语数据.json",
+                mime="application/json",
+                use_container_width=True
+            )
     
     else:
         st.markdown("""
@@ -791,15 +645,6 @@ with tab4:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; font-size: 0.9em; padding: 20px;'>
-    <p>🎬 旅游英语视频课件生成器 • 基于Streamlit • 版本 2.0 • 
-    <a href="#" style="color: #3B82F6; text-decoration: none;">使用说明</a> • 
-    <a href="#" style="color: #3B82F6; text-decoration: none;">问题反馈</a></p>
+    <p>🎬 旅游英语视频课件生成器 • 基于Streamlit • 版本 2.0</p>
 </div>
 """, unsafe_allow_html=True)
-
-# 初始化代码 - 只在第一次运行时执行
-if not st.session_state.environment_checked:
-    # 自动检查环境
-    with st.spinner("正在初始化环境..."):
-        time.sleep(2)
-        st.session_state.environment_checked = True
